@@ -1,3 +1,5 @@
+import math
+
 def read_signal(filepath):
     """
     Reads a signal from a .txt file.
@@ -50,13 +52,9 @@ def multiply_signal(x, y, scalar):
     Multiplies the amplitude of the signal by a constant scalar.
     If the scalar is -1, it inverts the signal.
     """
-    # The x (indices) array remains exactly the same
     new_y = []
-    
-    # Iterate through the amplitudes and multiply each by the scalar
     for amplitude in y:
         new_y.append(amplitude * scalar)
-        
     return x, new_y
 
 def add_multiple_signals(signals):
@@ -68,7 +66,6 @@ def add_multiple_signals(signals):
     if not signals:
         return [], []
         
-    # Step 1: Find the global minimum and maximum indices across all signals
     global_min_idx = float('inf')
     global_max_idx = float('-inf')
     
@@ -81,27 +78,143 @@ def add_multiple_signals(signals):
             if current_max > global_max_idx:
                 global_max_idx = current_max
                 
-    # If no valid indices were found (e.g., all signals were empty)
     if global_min_idx == float('inf'):
         return [], []
         
-    # Step 2: Create a unified X array spanning from global_min to global_max
     result_x = list(range(int(global_min_idx), int(global_max_idx) + 1))
-    
-    # Step 3: Create a zero-filled Y array of the same length
     result_y = [0.0] * len(result_x)
     
-    # Step 4: Add each signal's values to the zero-filled array at the correct positions
     for x_list, y_list in signals:
         for i in range(len(x_list)):
             current_x = x_list[i]
             current_y = y_list[i]
-            
-            # Find the correct position in our unified result_x array
-            # The offset is simply (current_x - global_min_idx)
             position = int(current_x - global_min_idx)
-            
-            # Add the amplitude to our accumulating result_y array
             result_y[position] += current_y
             
     return result_x, result_y
+
+def subtract_signals(sig1, sig2):
+    """
+    Subtracts sig2 from sig1: Result = sig1 - sig2
+    Handles zero-padding similar to addition.
+    """
+    x_list1, y_list1 = sig1
+    x_list2, y_list2 = sig2
+    
+    global_min_idx = min(min(x_list1) if x_list1 else float('inf'), 
+                         min(x_list2) if x_list2 else float('inf'))
+    global_max_idx = max(max(x_list1) if x_list1 else float('-inf'), 
+                         max(x_list2) if x_list2 else float('-inf'))
+                         
+    if global_min_idx == float('inf'):
+        return [], []
+        
+    result_x = list(range(int(global_min_idx), int(global_max_idx) + 1))
+    result_y = [0.0] * len(result_x)
+    
+    # Add sig1
+    for i in range(len(x_list1)):
+        pos = int(x_list1[i] - global_min_idx)
+        result_y[pos] += y_list1[i]
+        
+    # Subtract sig2
+    for i in range(len(x_list2)):
+        pos = int(x_list2[i] - global_min_idx)
+        result_y[pos] -= y_list2[i]
+        
+    return result_x, result_y
+
+def square_signal(x, y):
+    """
+    Squares the amplitude of the signal.
+    """
+    new_y = [val ** 2 for val in y]
+    return x, new_y
+
+def normalize_signal(x, y, norm_type):
+    """
+    Normalizes the signal from 0 to 1 or -1 to 1 depending on user choice.
+    """
+    if not y: return x, y
+    min_y = min(y)
+    max_y = max(y)
+    
+    # Handle division by zero if all values are identical
+    if min_y == max_y:
+        if norm_type == "0 to 1":
+            return x, [0.0]*len(y)
+        else:
+            return x, [0.0]*len(y)
+            
+    range_y = max_y - min_y
+    new_y = []
+    for val in y:
+        norm_val = (val - min_y) / range_y
+        if norm_type == "-1 to 1":
+            norm_val = 2 * norm_val - 1
+        new_y.append(norm_val)
+    return x, new_y
+
+def accumulate_signal(x, y):
+    """
+    Accumulates the signal values: y(n) = sum_{k=-inf}^{n} x(k)
+    """
+    new_y = []
+    current_sum = 0.0
+    for val in y:
+        current_sum += val
+        new_y.append(current_sum)
+    return x, new_y
+
+def quantize_signal(x, y, levels=None, bits=None):
+    """
+    Quantizes an input signal based on levels or bits.
+    Returns quantized signal, errors, and encoded signal (binary).
+    """
+    if bits is not None:
+        levels = 2 ** bits
+        
+    if not y or levels is None or levels <= 0:
+        return x, y, [], []
+        
+    min_y = min(y)
+    max_y = max(y)
+    
+    # Delta (step size)
+    if levels == 1:
+        delta = 0
+    else:
+        delta = (max_y - min_y) / levels
+    
+    quantized_y = []
+    errors = []
+    encoded = []
+    
+    for val in y:
+        # Determine the quantization interval
+        if delta == 0:
+            interval = 0
+        else:
+            interval = int((val - min_y) / delta)
+            
+        # Cap interval at levels - 1 for the maximum value
+        if interval >= levels:
+            interval = levels - 1
+            
+        # Midpoint of the interval is the quantized value
+        q_val = min_y + delta * (interval + 0.5)
+        
+        quantized_y.append(q_val)
+        errors.append(q_val - val) # Error = Quantized - Original
+        
+        # Encoded string (binary representation)
+        if bits is not None:
+            enc_str = format(interval, f'0{bits}b')
+        else:
+            # If bits not specified, calculate bits needed to represent 'levels'
+            b = math.ceil(math.log2(levels)) if levels > 1 else 1
+            enc_str = format(interval, f'0{b}b')
+            
+        encoded.append(enc_str)
+        
+    return x, quantized_y, errors, encoded

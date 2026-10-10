@@ -3,7 +3,9 @@ import os
 import numpy as np
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                              QHBoxLayout, QAction, QFileDialog, QInputDialog, 
-                             QMessageBox, QRadioButton, QButtonGroup, QLabel, QGroupBox)
+                             QMessageBox, QRadioButton, QButtonGroup, QLabel, 
+                             QGroupBox, QDialog, QTableWidget, QTableWidgetItem, 
+                             QHeaderView)
 from PyQt5.QtCore import Qt
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 import matplotlib.pyplot as plt
@@ -15,6 +17,28 @@ class MplCanvas(FigureCanvas):
         super(MplCanvas, self).__init__(self.fig)
         self.setParent(parent)
         self.fig.tight_layout()
+
+class QuantizationTableDialog(QDialog):
+    def __init__(self, x, orig_y, q_y, errors, encoded, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Quantization Results")
+        self.resize(600, 400)
+        
+        layout = QVBoxLayout(self)
+        table = QTableWidget()
+        table.setRowCount(len(x))
+        table.setColumnCount(5)
+        table.setHorizontalHeaderLabels(["Index", "Original Amplitude", "Quantized Amplitude", "Error", "Encoded"])
+        table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        
+        for i in range(len(x)):
+            table.setItem(i, 0, QTableWidgetItem(str(x[i])))
+            table.setItem(i, 1, QTableWidgetItem(f"{orig_y[i]:.4f}"))
+            table.setItem(i, 2, QTableWidgetItem(f"{q_y[i]:.4f}"))
+            table.setItem(i, 3, QTableWidgetItem(f"{errors[i]:.4f}"))
+            table.setItem(i, 4, QTableWidgetItem(encoded[i]))
+            
+        layout.addWidget(table)
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -100,9 +124,32 @@ class MainWindow(QMainWindow):
         add_action.triggered.connect(self.action_addition)
         arithmetic_menu.addAction(add_action)
         
+        sub_action = QAction('Subtraction...', self)
+        sub_action.triggered.connect(self.action_subtraction)
+        arithmetic_menu.addAction(sub_action)
+        
         mul_action = QAction('Multiplication...', self)
         mul_action.triggered.connect(self.action_multiplication)
         arithmetic_menu.addAction(mul_action)
+        
+        square_action = QAction('Squaring...', self)
+        square_action.triggered.connect(self.action_squaring)
+        arithmetic_menu.addAction(square_action)
+        
+        norm_action = QAction('Normalization...', self)
+        norm_action.triggered.connect(self.action_normalization)
+        arithmetic_menu.addAction(norm_action)
+        
+        acc_action = QAction('Accumulation...', self)
+        acc_action.triggered.connect(self.action_accumulation)
+        arithmetic_menu.addAction(acc_action)
+        
+        # Quantization Menu
+        quant_menu = menubar.addMenu('Quantization')
+        
+        quant_action = QAction('Quantize Signal...', self)
+        quant_action.triggered.connect(self.action_quantization)
+        quant_menu.addAction(quant_action)
 
     def load_signal(self, slot):
         options = QFileDialog.Options()
@@ -128,7 +175,6 @@ class MainWindow(QMainWindow):
         filepath, _ = QFileDialog.getSaveFileName(self, f"Save Signal {slot}", "", "Text Files (*.txt);;All Files (*)", options=options)
         if filepath:
             try:
-                # Ensure it ends with .txt
                 if not filepath.endswith('.txt'):
                     filepath += '.txt'
                 dsp_logic.save_signal(filepath, data[0], data[1])
@@ -145,7 +191,6 @@ class MainWindow(QMainWindow):
     def plot_signal(self, canvas, data, title):
         canvas.ax.clear()
         if data is not None:
-            # Use NumPy arrays for plotting as requested by framework constraints
             x = np.array(data[0])
             y = np.array(data[1])
             
@@ -166,13 +211,13 @@ class MainWindow(QMainWindow):
         canvas.fig.tight_layout()
         canvas.draw()
 
+    # --- Operation Actions ---
+
     def action_addition(self):
         options = QFileDialog.Options()
-        # Allow selecting multiple files for addition
         filepaths, _ = QFileDialog.getOpenFileNames(self, "Select Signals to Add", "", "Text Files (*.txt);;All Files (*)", options=options)
         
-        if not filepaths:
-            return
+        if not filepaths: return
             
         signals = []
         for path in filepaths:
@@ -182,20 +227,32 @@ class MainWindow(QMainWindow):
             except Exception as e:
                 QMessageBox.warning(self, "Warning", f"Failed to load {os.path.basename(path)}: {str(e)}")
                 
-        if not signals:
-            QMessageBox.critical(self, "Error", "No valid signals loaded for addition.")
-            return
+        if not signals: return
             
-        # Perform addition using our simple logic
         res_x, res_y = dsp_logic.add_multiple_signals(signals)
-        
-        # Load into Signal 1 for display
         self.signal1_data = (res_x, res_y)
         self.update_plots()
         QMessageBox.information(self, "Success", f"Successfully added {len(signals)} signals. Result plotted in Signal 1.")
 
+    def action_subtraction(self):
+        options = QFileDialog.Options()
+        file1, _ = QFileDialog.getOpenFileName(self, "Select Minuend Signal (Signal 1)", "", "Text Files (*.txt);;All Files (*)", options=options)
+        if not file1: return
+        
+        file2, _ = QFileDialog.getOpenFileName(self, "Select Subtrahend Signal (Signal 2)", "", "Text Files (*.txt);;All Files (*)", options=options)
+        if not file2: return
+        
+        try:
+            sig1 = dsp_logic.read_signal(file1)
+            sig2 = dsp_logic.read_signal(file2)
+            res_x, res_y = dsp_logic.subtract_signals(sig1, sig2)
+            self.signal1_data = (res_x, res_y)
+            self.update_plots()
+            QMessageBox.information(self, "Success", "Subtraction completed (Signal 1 - Signal 2). Result plotted in Signal 1.")
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed: {str(e)}")
+
     def action_multiplication(self):
-        # Let user choose which signal to multiply
         items = []
         if self.signal1_data: items.append("Signal 1")
         if self.signal2_data: items.append("Signal 2")
@@ -205,26 +262,130 @@ class MainWindow(QMainWindow):
             return
             
         item, ok = QInputDialog.getItem(self, "Select Signal", "Which signal to multiply?", items, 0, False)
-        if not ok or not item:
-            return
+        if not ok or not item: return
             
         scalar, ok = QInputDialog.getDouble(self, "Input Scalar", "Enter a constant value to multiply (e.g. -1 to invert):", 1.0)
-        if not ok:
-            return
+        if not ok: return
             
         data = self.signal1_data if item == "Signal 1" else self.signal2_data
-        x, y = data
+        res_x, res_y = dsp_logic.multiply_signal(data[0], data[1], scalar)
         
-        res_x, res_y = dsp_logic.multiply_signal(x, y, scalar)
-        
-        # Update the selected signal
-        if item == "Signal 1":
-            self.signal1_data = (res_x, res_y)
-        else:
-            self.signal2_data = (res_x, res_y)
+        if item == "Signal 1": self.signal1_data = (res_x, res_y)
+        else: self.signal2_data = (res_x, res_y)
             
         self.update_plots()
         QMessageBox.information(self, "Success", f"{item} successfully multiplied by {scalar}.")
+
+    def action_squaring(self):
+        items = []
+        if self.signal1_data: items.append("Signal 1")
+        if self.signal2_data: items.append("Signal 2")
+        
+        if not items:
+            QMessageBox.warning(self, "Warning", "Please load a signal first.")
+            return
+            
+        item, ok = QInputDialog.getItem(self, "Select Signal", "Which signal to square?", items, 0, False)
+        if not ok or not item: return
+            
+        data = self.signal1_data if item == "Signal 1" else self.signal2_data
+        res_x, res_y = dsp_logic.square_signal(data[0], data[1])
+        
+        if item == "Signal 1": self.signal1_data = (res_x, res_y)
+        else: self.signal2_data = (res_x, res_y)
+            
+        self.update_plots()
+        QMessageBox.information(self, "Success", f"{item} successfully squared.")
+
+    def action_normalization(self):
+        items = []
+        if self.signal1_data: items.append("Signal 1")
+        if self.signal2_data: items.append("Signal 2")
+        
+        if not items:
+            QMessageBox.warning(self, "Warning", "Please load a signal first.")
+            return
+            
+        item, ok = QInputDialog.getItem(self, "Select Signal", "Which signal to normalize?", items, 0, False)
+        if not ok or not item: return
+        
+        norm_types = ["0 to 1", "-1 to 1"]
+        n_type, ok2 = QInputDialog.getItem(self, "Select Normalization Type", "Normalize to:", norm_types, 0, False)
+        if not ok2 or not n_type: return
+        
+        data = self.signal1_data if item == "Signal 1" else self.signal2_data
+        res_x, res_y = dsp_logic.normalize_signal(data[0], data[1], n_type)
+        
+        if item == "Signal 1": self.signal1_data = (res_x, res_y)
+        else: self.signal2_data = (res_x, res_y)
+            
+        self.update_plots()
+        QMessageBox.information(self, "Success", f"{item} successfully normalized from {n_type}.")
+
+    def action_accumulation(self):
+        items = []
+        if self.signal1_data: items.append("Signal 1")
+        if self.signal2_data: items.append("Signal 2")
+        
+        if not items:
+            QMessageBox.warning(self, "Warning", "Please load a signal first.")
+            return
+            
+        item, ok = QInputDialog.getItem(self, "Select Signal", "Which signal to accumulate?", items, 0, False)
+        if not ok or not item: return
+            
+        data = self.signal1_data if item == "Signal 1" else self.signal2_data
+        res_x, res_y = dsp_logic.accumulate_signal(data[0], data[1])
+        
+        if item == "Signal 1": self.signal1_data = (res_x, res_y)
+        else: self.signal2_data = (res_x, res_y)
+            
+        self.update_plots()
+        QMessageBox.information(self, "Success", f"{item} successfully accumulated.")
+
+    def action_quantization(self):
+        items = []
+        if self.signal1_data: items.append("Signal 1")
+        if self.signal2_data: items.append("Signal 2")
+        
+        if not items:
+            QMessageBox.warning(self, "Warning", "Please load a signal first.")
+            return
+            
+        item, ok = QInputDialog.getItem(self, "Select Signal", "Which signal to quantize?", items, 0, False)
+        if not ok or not item: return
+        
+        choices = ["Levels", "Bits"]
+        q_choice, ok = QInputDialog.getItem(self, "Input Type", "Provide Levels or Bits?", choices, 0, False)
+        if not ok or not q_choice: return
+        
+        levels, bits = None, None
+        if q_choice == "Levels":
+            val, ok = QInputDialog.getInt(self, "Quantization", "Enter number of levels:", 4, 1)
+            if not ok: return
+            levels = val
+        else:
+            val, ok = QInputDialog.getInt(self, "Quantization", "Enter number of bits:", 2, 1)
+            if not ok: return
+            bits = val
+            
+        data = self.signal1_data if item == "Signal 1" else self.signal2_data
+        q_x, q_y, errors, encoded = dsp_logic.quantize_signal(data[0], data[1], levels=levels, bits=bits)
+        
+        if not q_y:
+            QMessageBox.warning(self, "Warning", "Failed to quantize signal.")
+            return
+            
+        # Plot Quantized on Signal 1, Error on Signal 2
+        self.signal1_data = (q_x, q_y)
+        self.signal2_data = (q_x, errors)
+        self.update_plots()
+        
+        QMessageBox.information(self, "Success", "Signal quantized. Quantized signal plotted in Signal 1, Error plotted in Signal 2.")
+        
+        # Display the detailed table
+        dialog = QuantizationTableDialog(q_x, data[1], q_y, errors, encoded, self)
+        dialog.exec_()
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)
