@@ -151,6 +151,13 @@ class MainWindow(QMainWindow):
         quant_action = QAction('Quantize Signal...', self)
         quant_action.triggered.connect(self.action_quantization)
         quant_menu.addAction(quant_action)
+        
+        # Testing Menu (for TA test suite)
+        test_menu = menubar.addMenu('Testing')
+        
+        run_tests_action = QAction('Run Task 1 TA Verification...', self)
+        run_tests_action.triggered.connect(self.action_run_task1_tests)
+        test_menu.addAction(run_tests_action)
 
     def load_signal(self, slot):
         options = QFileDialog.Options()
@@ -338,7 +345,7 @@ class MainWindow(QMainWindow):
             
         item, ok = QInputDialog.getItem(self, "Select Signal", "Which signal to accumulate?", items, 0, False)
         if not ok or not item: return
-            
+        
         data = self.signal1_data if item == "Signal 1" else self.signal2_data
         res_x, res_y = dsp_logic.accumulate_signal(data[0], data[1])
         
@@ -391,6 +398,30 @@ class MainWindow(QMainWindow):
         # Display the detailed table
         dialog = QuantizationTableDialog(q_x, data[1], q_y, errors, encoded, self)
         dialog.exec_()
+
+    def action_run_task1_tests(self):
+        try:
+            test_script_dir = os.path.join(os.path.dirname(__file__), "Labs", "Task1 files+test-20260930T203736Z-1-001")
+            if test_script_dir not in sys.path:
+                sys.path.insert(0, test_script_dir)
+            import Task1Test
+            
+            results = Task1Test.run_all_tests()
+            report_lines = []
+            all_passed = True
+            for test_name, passed in results:
+                status = "PASSED" if passed else "FAILED"
+                report_lines.append(f"• {test_name}: {status}")
+                if not passed:
+                    all_passed = False
+                    
+            summary = "\n".join(report_lines)
+            if all_passed:
+                QMessageBox.information(self, "TA Test Suite Results", f"All Task 1 tests passed successfully!\n\n{summary}")
+            else:
+                QMessageBox.warning(self, "TA Test Suite Results", f"Some tests failed:\n\n{summary}")
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to execute test suite: {str(e)}")
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)
