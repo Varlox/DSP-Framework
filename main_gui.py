@@ -31,6 +31,7 @@ class QuantizationTableDialog(QDialog):
         table.setHorizontalHeaderLabels(["Index", "Original Amplitude", "Quantized Amplitude", "Error", "Encoded"])
         table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         
+        # Populate table with quantization data
         for i in range(len(x)):
             table.setItem(i, 0, QTableWidgetItem(str(x[i])))
             table.setItem(i, 1, QTableWidgetItem(f"{orig_y[i]:.4f}"))
@@ -175,6 +176,7 @@ class MainWindow(QMainWindow):
         filepath, _ = QFileDialog.getSaveFileName(self, f"Save Signal {slot}", "", "Text Files (*.txt);;All Files (*)", options=options)
         if filepath:
             try:
+                # Ensure it ends with .txt
                 if not filepath.endswith('.txt'):
                     filepath += '.txt'
                 dsp_logic.save_signal(filepath, data[0], data[1])
@@ -191,6 +193,7 @@ class MainWindow(QMainWindow):
     def plot_signal(self, canvas, data, title):
         canvas.ax.clear()
         if data is not None:
+            # Use NumPy arrays for plotting as requested by framework constraints
             x = np.array(data[0])
             y = np.array(data[1])
             
@@ -215,6 +218,7 @@ class MainWindow(QMainWindow):
 
     def action_addition(self):
         options = QFileDialog.Options()
+        # Allow selecting multiple files for addition
         filepaths, _ = QFileDialog.getOpenFileNames(self, "Select Signals to Add", "", "Text Files (*.txt);;All Files (*)", options=options)
         
         if not filepaths: return
@@ -229,6 +233,7 @@ class MainWindow(QMainWindow):
                 
         if not signals: return
             
+        # Perform addition using zero-padding logic
         res_x, res_y = dsp_logic.add_multiple_signals(signals)
         self.signal1_data = (res_x, res_y)
         self.update_plots()
@@ -389,7 +394,7 @@ class MainWindow(QMainWindow):
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)
-    app.setStyle('Fusion') # Modern style
+    app.setStyle('Fusion')
     window = MainWindow()
     window.show()
     sys.exit(app.exec_())
