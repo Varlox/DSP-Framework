@@ -130,7 +130,7 @@ def quantize_signal(x, y, levels=None, bits=None):
         levels = 2 ** bits
         
     if not y or levels is None or levels <= 0:
-        return x, y, [], []
+        return x, [], y, [], []
         
     min_y = min(y)
     max_y = max(y)
@@ -140,6 +140,7 @@ def quantize_signal(x, y, levels=None, bits=None):
     else:
         delta = (max_y - min_y) / levels
     
+    intervals = []
     quantized_y = []
     errors = []
     encoded = []
@@ -155,6 +156,7 @@ def quantize_signal(x, y, levels=None, bits=None):
             
         q_val = min_y + delta * (interval + 0.5)
         
+        intervals.append(interval + 1)
         quantized_y.append(q_val)
         errors.append(q_val - val)
         
@@ -166,4 +168,4 @@ def quantize_signal(x, y, levels=None, bits=None):
             
         encoded.append(enc_str)
         
-    return x, quantized_y, errors, encoded
+    return x, intervals, quantized_y, errors, encoded

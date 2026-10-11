@@ -19,25 +19,26 @@ class MplCanvas(FigureCanvas):
         self.fig.tight_layout()
 
 class QuantizationTableDialog(QDialog):
-    def __init__(self, x, orig_y, q_y, errors, encoded, parent=None):
+    def __init__(self, x, intervals, orig_y, q_y, errors, encoded, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Quantization Results")
-        self.resize(600, 400)
+        self.resize(700, 420)
         
         layout = QVBoxLayout(self)
         table = QTableWidget()
         table.setRowCount(len(x))
         table.setColumnCount(5)
-        table.setHorizontalHeaderLabels(["Index", "Original Amplitude", "Quantized Amplitude", "Error", "Encoded"])
+        table.setHorizontalHeaderLabels(["Index", "Interval", "Encoded", "Quantized Amplitude", "Error"])
         table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         
         # Populate table with quantization data
         for i in range(len(x)):
             table.setItem(i, 0, QTableWidgetItem(str(x[i])))
-            table.setItem(i, 1, QTableWidgetItem(f"{orig_y[i]:.4f}"))
-            table.setItem(i, 2, QTableWidgetItem(f"{q_y[i]:.4f}"))
-            table.setItem(i, 3, QTableWidgetItem(f"{errors[i]:.4f}"))
-            table.setItem(i, 4, QTableWidgetItem(encoded[i]))
+            inter_val = str(intervals[i]) if i < len(intervals) else "-"
+            table.setItem(i, 1, QTableWidgetItem(inter_val))
+            table.setItem(i, 2, QTableWidgetItem(encoded[i]))
+            table.setItem(i, 3, QTableWidgetItem(f"{q_y[i]:.4f}"))
+            table.setItem(i, 4, QTableWidgetItem(f"{errors[i]:.4f}"))
             
         layout.addWidget(table)
 
@@ -152,12 +153,26 @@ class MainWindow(QMainWindow):
         quant_action.triggered.connect(self.action_quantization)
         quant_menu.addAction(quant_action)
         
-        # Testing Menu (for TA test suite)
+        # Testing Menu
         test_menu = menubar.addMenu('Testing')
         
-        run_tests_action = QAction('Run Task 1 TA Verification...', self)
-        run_tests_action.triggered.connect(self.action_run_task1_tests)
-        test_menu.addAction(run_tests_action)
+        run_task1_action = QAction('Run Task 1 TA Verification...', self)
+        run_task1_action.triggered.connect(self.action_run_task1_tests)
+        test_menu.addAction(run_task1_action)
+        
+        run_quan1_action = QAction('Run Quantization Test 1 (Bits = 3)...', self)
+        run_quan1_action.triggered.connect(self.action_run_quan1_test)
+        test_menu.addAction(run_quan1_action)
+        
+        run_quan2_action = QAction('Run Quantization Test 2 (Levels = 4)...', self)
+        run_quan2_action.triggered.connect(self.action_run_quan2_test)
+        test_menu.addAction(run_quan2_action)
+        
+        test_menu.addSeparator()
+        
+        run_all_action = QAction('Run All TA Tests (Task 1 & 2)...', self)
+        run_all_action.triggered.connect(self.action_run_all_tests)
+        test_menu.addAction(run_all_action)
 
     def load_signal(self, slot):
         options = QFileDialog.Options()
@@ -183,7 +198,6 @@ class MainWindow(QMainWindow):
         filepath, _ = QFileDialog.getSaveFileName(self, f"Save Signal {slot}", "", "Text Files (*.txt);;All Files (*)", options=options)
         if filepath:
             try:
-                # Ensure it ends with .txt
                 if not filepath.endswith('.txt'):
                     filepath += '.txt'
                 dsp_logic.save_signal(filepath, data[0], data[1])
@@ -200,7 +214,6 @@ class MainWindow(QMainWindow):
     def plot_signal(self, canvas, data, title):
         canvas.ax.clear()
         if data is not None:
-            # Use NumPy arrays for plotting as requested by framework constraints
             x = np.array(data[0])
             y = np.array(data[1])
             
@@ -225,7 +238,6 @@ class MainWindow(QMainWindow):
 
     def action_addition(self):
         options = QFileDialog.Options()
-        # Allow selecting multiple files for addition
         filepaths, _ = QFileDialog.getOpenFileNames(self, "Select Signals to Add", "", "Text Files (*.txt);;All Files (*)", options=options)
         
         if not filepaths: return
@@ -240,7 +252,6 @@ class MainWindow(QMainWindow):
                 
         if not signals: return
             
-        # Perform addition using zero-padding logic
         res_x, res_y = dsp_logic.add_multiple_signals(signals)
         self.signal1_data = (res_x, res_y)
         self.update_plots()
@@ -382,7 +393,7 @@ class MainWindow(QMainWindow):
             bits = val
             
         data = self.signal1_data if item == "Signal 1" else self.signal2_data
-        q_x, q_y, errors, encoded = dsp_logic.quantize_signal(data[0], data[1], levels=levels, bits=bits)
+        q_x, intervals, q_y, errors, encoded = dsp_logic.quantize_signal(data[0], data[1], levels=levels, bits=bits)
         
         if not q_y:
             QMessageBox.warning(self, "Warning", "Failed to quantize signal.")
@@ -396,8 +407,10 @@ class MainWindow(QMainWindow):
         QMessageBox.information(self, "Success", "Signal quantized. Quantized signal plotted in Signal 1, Error plotted in Signal 2.")
         
         # Display the detailed table
-        dialog = QuantizationTableDialog(q_x, data[1], q_y, errors, encoded, self)
+        dialog = QuantizationTableDialog(q_x, intervals, data[1], q_y, errors, encoded, self)
         dialog.exec_()
+
+    # --- Test Suite Actions ---
 
     def action_run_task1_tests(self):
         try:
@@ -417,11 +430,78 @@ class MainWindow(QMainWindow):
                     
             summary = "\n".join(report_lines)
             if all_passed:
-                QMessageBox.information(self, "TA Test Suite Results", f"All Task 1 tests passed successfully!\n\n{summary}")
+                QMessageBox.information(self, "Task 1 Tests", f"All Task 1 tests passed successfully!\n\n{summary}")
             else:
-                QMessageBox.warning(self, "TA Test Suite Results", f"Some tests failed:\n\n{summary}")
+                QMessageBox.warning(self, "Task 1 Tests", f"Some tests failed:\n\n{summary}")
         except Exception as e:
-            QMessageBox.critical(self, "Error", f"Failed to execute test suite: {str(e)}")
+            QMessageBox.critical(self, "Error", f"Failed to execute Task 1 test suite: {str(e)}")
+
+    def action_run_quan1_test(self):
+        try:
+            quan_dir = os.path.join(os.path.dirname(__file__), "Quantization-20261011T152410Z-1-001", "Quantization")
+            if quan_dir not in sys.path:
+                sys.path.insert(0, quan_dir)
+            import QuanTest1
+            
+            passed = QuanTest1.run_test1()
+            if passed:
+                QMessageBox.information(self, "Quantization Test 1", "Quantization Test 1 (Bits = 3) PASSED successfully!")
+            else:
+                QMessageBox.warning(self, "Quantization Test 1", "Quantization Test 1 FAILED!")
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to execute Quantization Test 1: {str(e)}")
+
+    def action_run_quan2_test(self):
+        try:
+            quan_dir = os.path.join(os.path.dirname(__file__), "Quantization-20261011T152410Z-1-001", "Quantization")
+            if quan_dir not in sys.path:
+                sys.path.insert(0, quan_dir)
+            import QuanTest2
+            
+            passed = QuanTest2.run_test2()
+            if passed:
+                QMessageBox.information(self, "Quantization Test 2", "Quantization Test 2 (Levels = 4) PASSED successfully!")
+            else:
+                QMessageBox.warning(self, "Quantization Test 2", "Quantization Test 2 FAILED!")
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to execute Quantization Test 2: {str(e)}")
+
+    def action_run_all_tests(self):
+        try:
+            report_lines = []
+            all_passed = True
+            
+            # Task 1 tests
+            test_script_dir = os.path.join(os.path.dirname(__file__), "Labs", "Task1 files+test-20260930T203736Z-1-001")
+            if test_script_dir not in sys.path:
+                sys.path.insert(0, test_script_dir)
+            import Task1Test
+            t1_res = Task1Test.run_all_tests()
+            for name, passed in t1_res:
+                report_lines.append(f"• {name}: {'PASSED' if passed else 'FAILED'}")
+                if not passed: all_passed = False
+                
+            # Quantization tests
+            quan_dir = os.path.join(os.path.dirname(__file__), "Quantization-20261011T152410Z-1-001", "Quantization")
+            if quan_dir not in sys.path:
+                sys.path.insert(0, quan_dir)
+            import QuanTest1, QuanTest2
+            
+            q1_passed = QuanTest1.run_test1()
+            report_lines.append(f"• Quantization Test 1 (Bits=3): {'PASSED' if q1_passed else 'FAILED'}")
+            if not q1_passed: all_passed = False
+            
+            q2_passed = QuanTest2.run_test2()
+            report_lines.append(f"• Quantization Test 2 (Levels=4): {'PASSED' if q2_passed else 'FAILED'}")
+            if not q2_passed: all_passed = False
+            
+            summary = "\n".join(report_lines)
+            if all_passed:
+                QMessageBox.information(self, "All TA Tests", f"All TA verification tests passed successfully!\n\n{summary}")
+            else:
+                QMessageBox.warning(self, "All TA Tests", f"Some tests failed:\n\n{summary}")
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to execute all tests: {str(e)}")
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)
