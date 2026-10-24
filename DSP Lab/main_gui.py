@@ -52,7 +52,9 @@ class MainWindow(QMainWindow):
         self.signal1_data = None # Tuple of (X, Y)
         self.signal2_data = None # Tuple of (X, Y)
         self.is_continuous = True
-        
+        self.spectrum = None # Tuple of (amplitudes, phases)
+        self.fs = 1.0
+
         self.init_ui()
         
     def init_ui(self):
@@ -153,6 +155,39 @@ class MainWindow(QMainWindow):
         quant_action.triggered.connect(self.action_quantization)
         quant_menu.addAction(quant_action)
         
+        # Frequency Domain Menu
+        freq_menu = menubar.addMenu('Frequency Domain')
+
+        dft_action = QAction('Apply DFT...', self)
+        dft_action.triggered.connect(self.action_dft)
+        freq_menu.addAction(dft_action)
+
+        dominant_action = QAction('Show Dominant Frequencies', self)
+        dominant_action.triggered.connect(self.action_dominant_frequencies)
+        freq_menu.addAction(dominant_action)
+
+        modify_action = QAction('Modify Amplitude / Phase...', self)
+        modify_action.triggered.connect(self.action_modify_component)
+        freq_menu.addAction(modify_action)
+
+        remove_dc_action = QAction('Remove DC Component...', self)
+        remove_dc_action.triggered.connect(self.action_remove_dc)
+        freq_menu.addAction(remove_dc_action)
+
+        idft_action = QAction('Reconstruct Signal (IDFT)', self)
+        idft_action.triggered.connect(self.action_idft)
+        freq_menu.addAction(idft_action)
+
+        freq_menu.addSeparator()
+
+        load_freq_action = QAction('Load Frequency-Domain File...', self)
+        load_freq_action.triggered.connect(self.action_load_freq_file)
+        freq_menu.addAction(load_freq_action)
+
+        save_freq_action = QAction('Save Frequency-Domain File...', self)
+        save_freq_action.triggered.connect(self.action_save_freq_file)
+        freq_menu.addAction(save_freq_action)
+
         # Testing Menu
         test_menu = menubar.addMenu('Testing')
         
@@ -168,9 +203,21 @@ class MainWindow(QMainWindow):
         run_quan2_action.triggered.connect(self.action_run_quan2_test)
         test_menu.addAction(run_quan2_action)
         
+        run_dft_test_action = QAction('Run DFT Test...', self)
+        run_dft_test_action.triggered.connect(self.action_run_dft_test)
+        test_menu.addAction(run_dft_test_action)
+
+        run_idft_test_action = QAction('Run IDFT Test...', self)
+        run_idft_test_action.triggered.connect(self.action_run_idft_test)
+        test_menu.addAction(run_idft_test_action)
+
+        run_dc_test_action = QAction('Run Remove DC Test...', self)
+        run_dc_test_action.triggered.connect(self.action_run_dc_test)
+        test_menu.addAction(run_dc_test_action)
+
         test_menu.addSeparator()
-        
-        run_all_action = QAction('Run All TA Tests (Task 1 & 2)...', self)
+
+        run_all_action = QAction('Run All TA Tests (Tasks 1, 2 & 4)...', self)
         run_all_action.triggered.connect(self.action_run_all_tests)
         test_menu.addAction(run_all_action)
 
@@ -410,7 +457,196 @@ class MainWindow(QMainWindow):
         dialog = QuantizationTableDialog(q_x, intervals, data[1], q_y, errors, encoded, self)
         dialog.exec_()
 
+    # --- Frequency Domain Actions ---
+
+    def pick_loaded_signal(self, prompt):
+        items = []
+        if self.signal1_data: items.append("Signal 1")
+        if self.signal2_data: items.append("Signal 2")
+
+        if not items:
+            QMessageBox.warning(self, "Warning", "Please load a signal first.")
+            return None, None
+
+        item, ok = QInputDialog.getItem(self, "Select Signal", prompt, items, 0, False)
+        if not ok or not item: return None, None
+
+        data = self.signal1_data if item == "Signal 1" else self.signal2_data
+        return item, data
+
+    def plot_spectrum(self):
+        if self.spectrum is None: return
+
+        amplitudes, phases = self.spectrum
+        freqs = np.array(dsp_logic.frequencies(len(amplitudes), self.fs))
+        normalized = np.array(dsp_logic.normalize_amplitudes(amplitudes))
+
+        self.canvas1.ax.clear()
+        self.canvas1.ax.stem(freqs, normalized, linefmt='#1f77b4', markerfmt='bo', basefmt='k-')
+        self.canvas1.ax.set_title("Frequency vs Amplitude (normalized)", fontweight="bold")
+        self.canvas1.ax.set_xlabel('Frequency (Hz)')
+        self.canvas1.ax.set_ylabel('Normalized Amplitude')
+        self.canvas1.ax.grid(True, linestyle='--', alpha=0.7)
+        self.canvas1.fig.tight_layout()
+        self.canvas1.draw()
+
+        self.canvas2.ax.clear()
+        self.canvas2.ax.stem(freqs, np.array(phases), linefmt='#d62728', markerfmt='ro', basefmt='k-')
+        self.canvas2.ax.set_title("Frequency vs Phase", fontweight="bold")
+        self.canvas2.ax.set_xlabel('Frequency (Hz)')
+        self.canvas2.ax.set_ylabel('Phase (radians)')
+        self.canvas2.ax.grid(True, linestyle='--', alpha=0.7)
+        self.canvas2.fig.tight_layout()
+        self.canvas2.draw()
+
+    def show_dominant_frequencies(self):
+        amplitudes, phases = self.spectrum
+        freqs = dsp_logic.frequencies(len(amplitudes), self.fs)
+        dominant = dsp_logic.dominant_frequencies(freqs, amplitudes)
+
+        if dominant:
+            lines = "\n".join(f"{f:.4f} Hz" for f in dominant)
+            QMessageBox.information(self, "Dominant Frequencies", f"Frequencies with normalized amplitude > 0.5:\n\n{lines}")
+        else:
+            QMessageBox.information(self, "Dominant Frequencies", "No frequency has normalized amplitude > 0.5.")
+
+    def action_dft(self):
+        item, data = self.pick_loaded_signal("Which signal to transform?")
+        if data is None: return
+
+        fs, ok = QInputDialog.getDouble(self, "Sampling Frequency", "Enter sampling frequency (Hz):", 100.0, 0.0001, 1e9, 4)
+        if not ok: return
+
+        self.fs = fs
+        self.spectrum = dsp_logic.dft(data[1])
+        self.plot_spectrum()
+        self.show_dominant_frequencies()
+
+    def action_dominant_frequencies(self):
+        if self.spectrum is None:
+            QMessageBox.warning(self, "Warning", "Apply DFT or load a frequency-domain file first.")
+            return
+        self.show_dominant_frequencies()
+
+    def action_modify_component(self):
+        if self.spectrum is None:
+            QMessageBox.warning(self, "Warning", "Apply DFT or load a frequency-domain file first.")
+            return
+
+        amplitudes, phases = self.spectrum
+        k, ok = QInputDialog.getInt(self, "Select Component", f"Enter component index k (0 to {len(amplitudes) - 1}):", 0, 0, len(amplitudes) - 1)
+        if not ok: return
+
+        new_amp, ok = QInputDialog.getDouble(self, "Modify Amplitude", f"Amplitude of k = {k} ({k * self.fs / len(amplitudes):.4f} Hz):", amplitudes[k], 0, 1e12, 6)
+        if not ok: return
+
+        new_phase, ok = QInputDialog.getDouble(self, "Modify Phase", f"Phase of k = {k} (radians):", phases[k], -1e6, 1e6, 6)
+        if not ok: return
+
+        amplitudes[k] = new_amp
+        phases[k] = new_phase
+        self.spectrum = (amplitudes, phases)
+        self.plot_spectrum()
+
+    def action_remove_dc(self):
+        item, data = self.pick_loaded_signal("Remove DC component from which signal?")
+        if data is None: return
+
+        res_y = dsp_logic.remove_dc_component(data[1])
+
+        if item == "Signal 1": self.signal1_data = (data[0], res_y)
+        else: self.signal2_data = (data[0], res_y)
+
+        self.update_plots()
+        QMessageBox.information(self, "Success", f"DC component removed from {item}.")
+
+    def action_idft(self):
+        if self.spectrum is None:
+            QMessageBox.warning(self, "Warning", "Apply DFT or load a frequency-domain file first.")
+            return
+
+        amplitudes, phases = self.spectrum
+        samples = dsp_logic.idft(amplitudes, phases)
+        self.signal1_data = (list(range(len(samples))), samples)
+        self.update_plots()
+        QMessageBox.information(self, "Success", "Signal reconstructed using IDFT. Result plotted in Signal 1.")
+
+    def action_load_freq_file(self):
+        options = QFileDialog.Options()
+        filepath, _ = QFileDialog.getOpenFileName(self, "Load Frequency-Domain File", "", "Text Files (*.txt);;All Files (*)", options=options)
+        if not filepath: return
+
+        fs, ok = QInputDialog.getDouble(self, "Sampling Frequency", "Enter sampling frequency (Hz):", self.fs, 0.0001, 1e9, 4)
+        if not ok: return
+
+        try:
+            amplitudes, phases = dsp_logic.read_freq_signal(filepath)
+            self.fs = fs
+            self.spectrum = (amplitudes, phases)
+            self.plot_spectrum()
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to load frequency-domain file: {str(e)}")
+
+    def action_save_freq_file(self):
+        if self.spectrum is None:
+            QMessageBox.warning(self, "Warning", "No frequency-domain data to save.")
+            return
+
+        options = QFileDialog.Options()
+        filepath, _ = QFileDialog.getSaveFileName(self, "Save Frequency-Domain File", "", "Text Files (*.txt);;All Files (*)", options=options)
+        if filepath:
+            try:
+                if not filepath.endswith('.txt'):
+                    filepath += '.txt'
+                dsp_logic.save_freq_signal(filepath, self.spectrum[0], self.spectrum[1])
+                QMessageBox.information(self, "Success", f"Saved to {os.path.basename(filepath)}")
+            except Exception as e:
+                QMessageBox.critical(self, "Error", f"Failed to save: {str(e)}")
+
     # --- Test Suite Actions ---
+
+    def load_task4_tests(self):
+        task4_dir = os.path.join(os.path.dirname(__file__), "Labs", "Task & Files-20261024T083112Z-1-001", "Task & Files")
+        compare_dir = os.path.join(task4_dir, "Test Cases-20261024T083237Z-1-001", "Test Cases")
+        dc_dir = os.path.join(task4_dir, "Remove DC component-20261024T083221Z-1-001", "Remove DC component")
+        for path in (compare_dir, dc_dir):
+            if path not in sys.path:
+                sys.path.insert(0, path)
+        import signalcompare, CompareSignals
+        return signalcompare, CompareSignals
+
+    def action_run_dft_test(self):
+        try:
+            signalcompare, _ = self.load_task4_tests()
+            passed = signalcompare.run_dft_test()
+            if passed:
+                QMessageBox.information(self, "DFT Test", "DFT Test (Amplitude & Phase) PASSED successfully!")
+            else:
+                QMessageBox.warning(self, "DFT Test", "DFT Test FAILED!")
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to execute DFT test: {str(e)}")
+
+    def action_run_idft_test(self):
+        try:
+            signalcompare, _ = self.load_task4_tests()
+            passed = signalcompare.run_idft_test()
+            if passed:
+                QMessageBox.information(self, "IDFT Test", "IDFT Test PASSED successfully!")
+            else:
+                QMessageBox.warning(self, "IDFT Test", "IDFT Test FAILED!")
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to execute IDFT test: {str(e)}")
+
+    def action_run_dc_test(self):
+        try:
+            _, compare_signals = self.load_task4_tests()
+            passed = compare_signals.run_dc_test()
+            if passed:
+                QMessageBox.information(self, "Remove DC Test", "Remove DC Component Test PASSED successfully!")
+            else:
+                QMessageBox.warning(self, "Remove DC Test", "Remove DC Component Test FAILED!")
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to execute Remove DC test: {str(e)}")
 
     def action_run_task1_tests(self):
         try:
@@ -494,7 +730,15 @@ class MainWindow(QMainWindow):
             q2_passed = QuanTest2.run_test2()
             report_lines.append(f"• Quantization Test 2 (Levels=4): {'PASSED' if q2_passed else 'FAILED'}")
             if not q2_passed: all_passed = False
-            
+
+            # Task 4 tests
+            signalcompare, compare_signals = self.load_task4_tests()
+            for name, passed in [("DFT (Amplitude & Phase)", signalcompare.run_dft_test()),
+                                 ("IDFT", signalcompare.run_idft_test()),
+                                 ("Remove DC Component", compare_signals.run_dc_test())]:
+                report_lines.append(f"• {name}: {'PASSED' if passed else 'FAILED'}")
+                if not passed: all_passed = False
+
             summary = "\n".join(report_lines)
             if all_passed:
                 QMessageBox.information(self, "All TA Tests", f"All TA verification tests passed successfully!\n\n{summary}")

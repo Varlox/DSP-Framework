@@ -1,4 +1,5 @@
 import math
+import cmath
 
 def read_signal(filepath):
     x_indices = []
@@ -167,5 +168,89 @@ def quantize_signal(x, y, levels=None, bits=None):
             enc_str = format(interval, f'0{b}b')
             
         encoded.append(enc_str)
-        
+
     return x, intervals, quantized_y, errors, encoded
+
+def read_freq_signal(filepath):
+    amplitudes = []
+    phases = []
+
+    with open(filepath, 'r') as f:
+        for _ in range(3):
+            f.readline()
+
+        for line in f:
+            parts = line.replace('f', '').split()
+            if len(parts) >= 2:
+                amplitudes.append(float(parts[0]))
+                phases.append(float(parts[1]))
+
+    return amplitudes, phases
+
+def save_freq_signal(filepath, amplitudes, phases):
+    with open(filepath, 'w') as f:
+        f.write("1\n")
+        f.write("0\n")
+        f.write(f"{len(amplitudes)}\n")
+        for i in range(len(amplitudes)):
+            f.write(f"{amplitudes[i]} {phases[i]}\n")
+
+def fourier_transform(values, inverse=False):
+    N = len(values)
+    sign = 1 if inverse else -1
+    result = []
+
+    for k in range(N):
+        total = 0j
+        for n in range(N):
+            angle = 2 * math.pi * k * n / N
+            total += values[n] * complex(math.cos(angle), sign * math.sin(angle))
+
+        if inverse:
+            total = total / N
+        result.append(total)
+
+    return result
+
+def dft(y):
+    X = fourier_transform(y)
+    amplitudes = []
+    phases = []
+    for value in X:
+        amplitudes.append(math.sqrt(value.real ** 2 + value.imag ** 2))
+        phases.append(math.atan2(value.imag, value.real))
+    return amplitudes, phases
+
+def idft(amplitudes, phases):
+    X = []
+    for i in range(len(amplitudes)):
+        X.append(cmath.rect(amplitudes[i], phases[i]))
+
+    x = fourier_transform(X, inverse=True)
+    samples = []
+    for value in x:
+        samples.append(value.real)
+    return samples
+
+def frequencies(N, fs):
+    return [k * fs / N for k in range(N)]
+
+def normalize_amplitudes(amplitudes):
+    max_amp = max(amplitudes) if amplitudes else 0
+    if max_amp == 0:
+        return [0.0] * len(amplitudes)
+    return [a / max_amp for a in amplitudes]
+
+def dominant_frequencies(freqs, amplitudes):
+    normalized = normalize_amplitudes(amplitudes)
+    dominant = []
+    for i in range(len(freqs)):
+        if normalized[i] > 0.5:
+            dominant.append(freqs[i])
+    return dominant
+
+def remove_dc_component(y):
+    amplitudes, phases = dft(y)
+    amplitudes[0] = 0.0
+    phases[0] = 0.0
+    return idft(amplitudes, phases)
