@@ -200,11 +200,15 @@ def fourier_transform(values, inverse=False):
     sign = 1 if inverse else -1
     result = []
 
+    twiddle = []
+    for m in range(N):
+        angle = 2 * math.pi * m / N
+        twiddle.append(complex(math.cos(angle), sign * math.sin(angle)))
+
     for k in range(N):
         total = 0j
         for n in range(N):
-            angle = 2 * math.pi * k * n / N
-            total += values[n] * complex(math.cos(angle), sign * math.sin(angle))
+            total += values[n] * twiddle[(k * n) % N]
 
         if inverse:
             total = total / N

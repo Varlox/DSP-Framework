@@ -1,753 +1,1059 @@
 import sys
 import os
+import math
+import importlib
 import numpy as np
-from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
-                             QHBoxLayout, QAction, QFileDialog, QInputDialog, 
-                             QMessageBox, QRadioButton, QButtonGroup, QLabel, 
-                             QGroupBox, QDialog, QTableWidget, QTableWidgetItem, 
-                             QHeaderView)
-from PyQt5.QtCore import Qt
-from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
-import matplotlib.pyplot as plt
+from PyQt5.QtCore import Qt, QSettings, pyqtSignal
+from PyQt5.QtGui import QKeySequence
+from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
+                             QFormLayout, QAction, QFileDialog, QInputDialog, QMessageBox,
+                             QLabel, QFrame, QPushButton, QButtonGroup, QComboBox, QScrollArea,
+                             QDialog, QDialogButtonBox, QSpinBox, QDoubleSpinBox, QTableWidget,
+                             QTableWidgetItem, QHeaderView, QAbstractItemView, QSizePolicy)
+from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas, NavigationToolbar2QT
+from matplotlib.figure import Figure
+from matplotlib.ticker import MaxNLocator
 import dsp_logic
+import gui_theme
 
-class MplCanvas(FigureCanvas):
-    def __init__(self, parent=None, width=5, height=4, dpi=100):
-        self.fig, self.ax = plt.subplots(figsize=(width, height), dpi=dpi)
-        super(MplCanvas, self).__init__(self.fig)
-        self.setParent(parent)
-        self.fig.tight_layout()
+ROOT = os.path.dirname(os.path.abspath(__file__))
+TASK1_DIR = os.path.join(ROOT, "Labs", "Task1 files+test-20260930T203736Z-1-001")
+QUAN_DIR = os.path.join(ROOT, "Quantization-20261011T152410Z-1-001", "Quantization")
+TASK4_DIR = os.path.join(ROOT, "Labs", "Task & Files-20261024T083112Z-1-001", "Task & Files")
+COMPARE_DIR = os.path.join(TASK4_DIR, "Test Cases-20261024T083237Z-1-001", "Test Cases")
+DC_DIR = os.path.join(TASK4_DIR, "Remove DC component-20261024T083221Z-1-001", "Remove DC component")
+
+STEM_LIMIT = 300
+HISTORY_LIMIT = 30
+FILE_FILTER = "Text Files (*.txt);;All Files (*)"
+
+SECTIONS = [
+    ("Signals", ["load", "save"]),
+    ("Arithmetic", ["add", "sub", "add_files", "mul", "square", "norm", "acc"]),
+    ("Quantization", ["quant"]),
+    ("Frequency Domain", ["dft", "dominant", "modify", "remove_dc", "idft", "load_freq", "save_freq"]),
+]
+
+
+def load_module(folder, name):
+    if folder not in sys.path:
+        sys.path.insert(0, folder)
+    return importlib.import_module(name)
+
+
+def run_task1():
+    return load_module(TASK1_DIR, "Task1Test").run_all_tests()
+
+def run_quan1():
+    return [("Quantization Test 1 (Bits = 3)", load_module(QUAN_DIR, "QuanTest1").run_test1())]
+
+def run_quan2():
+    return [("Quantization Test 2 (Levels = 4)", load_module(QUAN_DIR, "QuanTest2").run_test2())]
+
+def run_dft():
+    return [("DFT - Amplitude & Phase", load_module(COMPARE_DIR, "signalcompare").run_dft_test())]
+
+def run_idft():
+    return [("IDFT - Reconstruction", load_module(COMPARE_DIR, "signalcompare").run_idft_test())]
+
+def run_dc():
+    return [("Remove DC Component", load_module(DC_DIR, "CompareSignals").run_dc_test())]
+
+
+TEST_SUITES = [
+    ("Task 1 Tests", run_task1),
+    ("Quantization Test 1 (Bits = 3)", run_quan1),
+    ("Quantization Test 2 (Levels = 4)", run_quan2),
+    ("DFT Test", run_dft),
+    ("IDFT Test", run_idft),
+    ("Remove DC Test", run_dc),
+]
+
+
+class PlotCard(QFrame):
+    file_dropped = pyqtSignal(str)
+
+    def __init__(self):
+        super().__init__()
+        self.setObjectName("card")
+        self.setAcceptDrops(True)
+        self.home = None
+
+        self.fig = Figure(figsize=(5, 4), dpi=100, layout="constrained")
+        self.ax = self.fig.add_subplot(111)
+        self.canvas = FigureCanvas(self.fig)
+        self.canvas.setMinimumSize(300, 240)
+
+        self.toolbar = NavigationToolbar2QT(self.canvas, self)
+        self.toolbar.hide()
+
+        self.title = QLabel()
+        self.title.setObjectName("cardTitle")
+        self.info = QLabel()
+        self.info.setObjectName("muted")
+        self.title.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        self.info.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+
+        self.zoom_btn = self.make_tool("Zoom", "Drag a rectangle on the plot to zoom in", True)
+        self.pan_btn = self.make_tool("Pan", "Drag the plot to move around", True)
+        reset_btn = self.make_tool("Reset", "Restore the original view")
+        save_btn = self.make_tool("Save PNG", "Save this plot as an image")
+        self.zoom_btn.clicked.connect(self.toggle_zoom)
+        self.pan_btn.clicked.connect(self.toggle_pan)
+        reset_btn.clicked.connect(self.reset_view)
+        save_btn.clicked.connect(self.save_image)
+
+        titles = QVBoxLayout()
+        titles.setSpacing(0)
+        titles.addWidget(self.title)
+        titles.addWidget(self.info)
+
+        tools = QHBoxLayout()
+        tools.setSpacing(6)
+        tools.addStretch()
+        for button in (self.zoom_btn, self.pan_btn, reset_btn, save_btn):
+            tools.addWidget(button)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(16, 14, 16, 12)
+        layout.addLayout(titles)
+        layout.addWidget(self.canvas, 1)
+        layout.addLayout(tools)
+
+    def make_tool(self, text, tip, checkable=False):
+        button = QPushButton(text)
+        button.setObjectName("tool")
+        button.setToolTip(tip)
+        button.setCheckable(checkable)
+        button.setCursor(Qt.PointingHandCursor)
+        return button
+
+    def mode_name(self):
+        mode = self.toolbar.mode
+        return getattr(mode, "name", str(mode))
+
+    def sync_tools(self):
+        mode = self.mode_name()
+        self.zoom_btn.setChecked(mode == "ZOOM")
+        self.pan_btn.setChecked(mode == "PAN")
+
+    def toggle_zoom(self):
+        if self.mode_name() == "PAN":
+            self.toolbar.pan()
+        self.toolbar.zoom()
+        self.sync_tools()
+
+    def toggle_pan(self):
+        if self.mode_name() == "ZOOM":
+            self.toolbar.zoom()
+        self.toolbar.pan()
+        self.sync_tools()
+
+    def reset_view(self):
+        if self.home is None:
+            return
+        self.ax.set_xlim(self.home[0])
+        self.ax.set_ylim(self.home[1])
+        self.canvas.draw_idle()
+
+    def save_image(self):
+        path, _ = QFileDialog.getSaveFileName(self, "Save Plot", "plot.png", "PNG Image (*.png);;SVG Image (*.svg)")
+        if path:
+            self.fig.savefig(path, dpi=200, facecolor=self.fig.get_facecolor())
+
+    def dragEnterEvent(self, event):
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+
+    def dropEvent(self, event):
+        for url in event.mimeData().urls():
+            path = url.toLocalFile()
+            if path:
+                self.file_dropped.emit(path)
+                break
+
+    def finish(self, c):
+        gui_theme.style_axes(self.ax, c)
+        self.home = (self.ax.get_xlim(), self.ax.get_ylim())
+        self.canvas.draw_idle()
+
+    def show_empty(self, message, c):
+        self.ax.clear()
+        self.ax.set_xticks([])
+        self.ax.set_yticks([])
+        self.ax.text(0.5, 0.5, message, transform=self.ax.transAxes, ha="center", va="center",
+                     color=c["muted"], fontsize=11, linespacing=1.7)
+        gui_theme.style_axes(self.ax, c)
+        self.ax.grid(False)
+        for spine in self.ax.spines.values():
+            spine.set_visible(False)
+        self.home = None
+        self.canvas.draw_idle()
+
+    def show_time(self, x, y, discrete, c, color_key):
+        ax = self.ax
+        ax.clear()
+        x = np.asarray(x)
+        y = np.asarray(y, dtype=float)
+        color = c[color_key]
+        as_stems = discrete and len(x) <= STEM_LIMIT
+        if as_stems:
+            ax.vlines(x, 0, y, colors=color, linewidth=1.6)
+            ax.plot(x, y, "o", color=color, markersize=5)
+            ax.axhline(0, color=c["muted"], linewidth=0.8)
+        else:
+            ax.plot(x, y, color=color, linewidth=2)
+        ax.set_xlabel("Index (n)")
+        ax.set_ylabel("Amplitude")
+        ax.xaxis.set_major_locator(MaxNLocator(integer=True))
+        ax.margins(x=0.04, y=0.12)
+        self.finish(c)
+        return as_stems
+
+    def show_amplitude(self, freqs, normalized, c):
+        ax = self.ax
+        ax.clear()
+        colors = np.where(normalized > 0.5, c["plot2"], c["plot1"])
+        ax.vlines(freqs, 0, normalized, colors=colors, linewidth=1.6)
+        ax.scatter(freqs, normalized, c=colors, s=26, zorder=3)
+        ax.axhline(0.5, color=c["muted"], linestyle="--", linewidth=1)
+        ax.set_xlabel("Frequency (Hz)")
+        ax.set_ylabel("Normalized amplitude")
+        ax.margins(x=0.05)
+        ax.set_ylim(0, 1.12)
+        self.finish(c)
+
+    def show_phase(self, freqs, phases, c):
+        ax = self.ax
+        ax.clear()
+        ax.vlines(freqs, 0, phases, colors=c["plot1"], linewidth=1.6)
+        ax.scatter(freqs, phases, c=c["plot1"], s=26, zorder=3)
+        ax.axhline(0, color=c["muted"], linewidth=0.8)
+        ax.set_xlabel("Frequency (Hz)")
+        ax.set_ylabel("Phase (rad)")
+        ax.margins(x=0.05)
+        ax.set_ylim(-math.pi * 1.15, math.pi * 1.15)
+        ax.set_yticks([-math.pi, -math.pi / 2, 0, math.pi / 2, math.pi])
+        ax.set_yticklabels(["-π", "-π/2", "0", "π/2", "π"])
+        self.finish(c)
+
+
+class QuantizeDialog(QDialog):
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.setWindowTitle("Quantize Signal")
+        self.setMinimumWidth(340)
+
+        self.mode = QComboBox()
+        self.mode.addItems(["Levels", "Bits"])
+        self.value = QSpinBox()
+        self.hint = QLabel()
+        self.hint.setObjectName("muted")
+        self.mode.currentIndexChanged.connect(self.on_mode)
+        self.value.valueChanged.connect(self.update_hint)
+
+        form = QFormLayout()
+        form.addRow("Specify", self.mode)
+        form.addRow("Value", self.value)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 18, 20, 16)
+        layout.setSpacing(12)
+        layout.addLayout(form)
+        layout.addWidget(self.hint)
+        layout.addWidget(buttons)
+        self.on_mode()
+
+    def on_mode(self):
+        if self.mode.currentText() == "Levels":
+            self.value.setRange(1, 65536)
+            self.value.setValue(4)
+        else:
+            self.value.setRange(1, 16)
+            self.value.setValue(3)
+        self.update_hint()
+
+    def update_hint(self):
+        value = self.value.value()
+        if self.mode.currentText() == "Levels":
+            bits = math.ceil(math.log2(value)) if value > 1 else 1
+            self.hint.setText(f"{value} levels need {bits} bit(s) per sample")
+        else:
+            self.hint.setText(f"{value} bit(s) give {2 ** value} levels")
+
+    def values(self):
+        if self.mode.currentText() == "Levels":
+            return self.value.value(), None
+        return None, self.value.value()
+
 
 class QuantizationTableDialog(QDialog):
-    def __init__(self, x, intervals, orig_y, q_y, errors, encoded, parent=None):
+    def __init__(self, x, intervals, q_y, errors, encoded, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Quantization Results")
-        self.resize(700, 420)
-        
-        layout = QVBoxLayout(self)
-        table = QTableWidget()
-        table.setRowCount(len(x))
-        table.setColumnCount(5)
+        self.resize(720, 460)
+
+        table = QTableWidget(len(x), 5)
         table.setHorizontalHeaderLabels(["Index", "Interval", "Encoded", "Quantized Amplitude", "Error"])
         table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-        
-        # Populate table with quantization data
+        table.verticalHeader().hide()
+        table.setAlternatingRowColors(True)
+        table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        table.setUpdatesEnabled(False)
         for i in range(len(x)):
-            table.setItem(i, 0, QTableWidgetItem(str(x[i])))
-            inter_val = str(intervals[i]) if i < len(intervals) else "-"
-            table.setItem(i, 1, QTableWidgetItem(inter_val))
-            table.setItem(i, 2, QTableWidgetItem(encoded[i]))
-            table.setItem(i, 3, QTableWidgetItem(f"{q_y[i]:.4f}"))
-            table.setItem(i, 4, QTableWidgetItem(f"{errors[i]:.4f}"))
-            
+            row = [str(x[i]), str(intervals[i]), encoded[i], f"{q_y[i]:.4f}", f"{errors[i]:.4f}"]
+            for col, text in enumerate(row):
+                item = QTableWidgetItem(text)
+                item.setTextAlignment(Qt.AlignCenter)
+                table.setItem(i, col, item)
+        table.setUpdatesEnabled(True)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(16, 16, 16, 16)
         layout.addWidget(table)
+
+
+class ModifyComponentDialog(QDialog):
+    def __init__(self, window):
+        super().__init__(window)
+        self.owner = window
+        self.setWindowTitle("Modify Component")
+        self.setMinimumWidth(360)
+
+        self.k = QSpinBox()
+        self.freq_label = QLabel()
+        self.freq_label.setObjectName("muted")
+        self.amp = QDoubleSpinBox()
+        self.amp.setDecimals(6)
+        self.amp.setRange(0, 1e12)
+        self.phase = QDoubleSpinBox()
+        self.phase.setDecimals(6)
+        self.phase.setRange(-1000, 1000)
+        self.phase.setSuffix(" rad")
+        self.k.valueChanged.connect(self.load_component)
+
+        form = QFormLayout()
+        form.addRow("Component k", self.k)
+        form.addRow("", self.freq_label)
+        form.addRow("Amplitude", self.amp)
+        form.addRow("Phase", self.phase)
+
+        apply_btn = QPushButton("Apply")
+        apply_btn.setObjectName("primary")
+        apply_btn.clicked.connect(self.apply)
+        close_btn = QPushButton("Close")
+        close_btn.setObjectName("ghost")
+        close_btn.clicked.connect(self.close)
+        buttons = QHBoxLayout()
+        buttons.addStretch()
+        buttons.addWidget(close_btn)
+        buttons.addWidget(apply_btn)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 18, 20, 16)
+        layout.setSpacing(12)
+        layout.addLayout(form)
+        layout.addLayout(buttons)
+        self.reload()
+
+    def reload(self):
+        if self.owner.spectrum is None:
+            self.close()
+            return
+        self.k.blockSignals(True)
+        self.k.setRange(0, len(self.owner.spectrum[0]) - 1)
+        self.k.blockSignals(False)
+        self.load_component()
+
+    def load_component(self):
+        amplitudes, phases = self.owner.spectrum
+        k = self.k.value()
+        self.amp.setValue(amplitudes[k])
+        self.phase.setValue(phases[k])
+        self.freq_label.setText(f"Frequency: {k * self.owner.fs / len(amplitudes):.4g} Hz")
+
+    def apply(self):
+        self.owner.modify_component(self.k.value(), self.amp.value(), self.phase.value())
+
+
+class TestReportDialog(QDialog):
+    def __init__(self, results, colors, parent):
+        super().__init__(parent)
+        self.setWindowTitle("Test Results")
+        self.setMinimumWidth(420)
+
+        passed = sum(1 for _, ok in results if ok)
+        all_ok = passed == len(results)
+        color = colors["ok"] if all_ok else colors["bad"]
+
+        header = QLabel(f"{passed} of {len(results)} tests passed")
+        header.setObjectName("cardTitle")
+        header.setStyleSheet(f"color: {color};")
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(22, 20, 22, 18)
+        layout.setSpacing(8)
+        layout.addWidget(header)
+        for name, ok in results:
+            row_color = colors["ok"] if ok else colors["bad"]
+            mark = "✓ PASSED" if ok else "✗ FAILED"
+            label = QLabel(f"<span style='color:{row_color}; font-weight:600'>{mark}</span>&nbsp;&nbsp;{name}")
+            layout.addWidget(label)
+
+        close_btn = QPushButton("Close")
+        close_btn.setObjectName("primary")
+        close_btn.clicked.connect(self.accept)
+        layout.addSpacing(8)
+        layout.addWidget(close_btn)
+
 
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Advanced DSP Framework")
-        self.setGeometry(100, 100, 1100, 600)
-        
-        # State variables
-        self.signal1_data = None # Tuple of (X, Y)
-        self.signal2_data = None # Tuple of (X, Y)
-        self.is_continuous = True
-        self.spectrum = None # Tuple of (amplitudes, phases)
-        self.fs = 1.0
+        self.setMinimumSize(1020, 620)
 
-        self.init_ui()
-        
-    def init_ui(self):
-        # --- Central Widget & Layout ---
-        central_widget = QWidget()
-        self.setCentralWidget(central_widget)
-        main_layout = QVBoxLayout(central_widget)
-        
-        # --- Controls Area ---
-        controls_group = QGroupBox("Signal Representation Settings")
-        controls_layout = QHBoxLayout()
-        
-        self.radio_continuous = QRadioButton("Continuous (Line Graph)")
-        self.radio_discrete = QRadioButton("Discrete (Stem Graph)")
-        self.radio_continuous.setChecked(True)
-        
-        self.radio_group = QButtonGroup()
-        self.radio_group.addButton(self.radio_continuous)
-        self.radio_group.addButton(self.radio_discrete)
-        
-        self.radio_continuous.toggled.connect(self.update_plots)
-        
-        controls_layout.addWidget(self.radio_continuous)
-        controls_layout.addWidget(self.radio_discrete)
-        controls_layout.addStretch()
-        
-        controls_group.setLayout(controls_layout)
-        main_layout.addWidget(controls_group)
-        
-        # --- Plotting Area ---
-        plot_layout = QHBoxLayout()
-        
-        # Canvas 1
-        self.canvas1 = MplCanvas(self, width=5, height=4, dpi=100)
-        plot_layout.addWidget(self.canvas1)
-        
-        # Canvas 2
-        self.canvas2 = MplCanvas(self, width=5, height=4, dpi=100)
-        plot_layout.addWidget(self.canvas2)
-        
-        main_layout.addLayout(plot_layout)
-        
-        # --- Menu Bar ---
-        menubar = self.menuBar()
-        
-        # File Menu
-        file_menu = menubar.addMenu('File')
-        
-        load_sig1_action = QAction('Load Signal 1...', self)
-        load_sig1_action.triggered.connect(lambda: self.load_signal(1))
-        file_menu.addAction(load_sig1_action)
-        
-        load_sig2_action = QAction('Load Signal 2...', self)
-        load_sig2_action.triggered.connect(lambda: self.load_signal(2))
-        file_menu.addAction(load_sig2_action)
-        
-        file_menu.addSeparator()
-        
-        save_sig1_action = QAction('Save Signal 1...', self)
-        save_sig1_action.triggered.connect(lambda: self.save_signal_to_file(1))
-        file_menu.addAction(save_sig1_action)
-        
-        save_sig2_action = QAction('Save Signal 2...', self)
-        save_sig2_action.triggered.connect(lambda: self.save_signal_to_file(2))
-        file_menu.addAction(save_sig2_action)
-        
-        # Arithmetic Operations Menu
-        arithmetic_menu = menubar.addMenu('Arithmetic Operations')
-        
-        add_action = QAction('Addition...', self)
-        add_action.triggered.connect(self.action_addition)
-        arithmetic_menu.addAction(add_action)
-        
-        sub_action = QAction('Subtraction...', self)
-        sub_action.triggered.connect(self.action_subtraction)
-        arithmetic_menu.addAction(sub_action)
-        
-        mul_action = QAction('Multiplication...', self)
-        mul_action.triggered.connect(self.action_multiplication)
-        arithmetic_menu.addAction(mul_action)
-        
-        square_action = QAction('Squaring...', self)
-        square_action.triggered.connect(self.action_squaring)
-        arithmetic_menu.addAction(square_action)
-        
-        norm_action = QAction('Normalization...', self)
-        norm_action.triggered.connect(self.action_normalization)
-        arithmetic_menu.addAction(norm_action)
-        
-        acc_action = QAction('Accumulation...', self)
-        acc_action.triggered.connect(self.action_accumulation)
-        arithmetic_menu.addAction(acc_action)
-        
-        # Quantization Menu
-        quant_menu = menubar.addMenu('Quantization')
-        
-        quant_action = QAction('Quantize Signal...', self)
-        quant_action.triggered.connect(self.action_quantization)
-        quant_menu.addAction(quant_action)
-        
-        # Frequency Domain Menu
-        freq_menu = menubar.addMenu('Frequency Domain')
+        self.settings = QSettings("DSPLab", "AdvancedDSPFramework")
+        self.dark = self.settings.value("dark", False, type=bool)
+        self.colors = gui_theme.DARK if self.dark else gui_theme.LIGHT
 
-        dft_action = QAction('Apply DFT...', self)
-        dft_action.triggered.connect(self.action_dft)
-        freq_menu.addAction(dft_action)
+        self.signals = {1: None, 2: None}
+        self.spectrum = None
+        self.fs = 100.0
+        self.view = "time"
+        self.discrete = False
+        self.undo_stack = []
+        self.redo_stack = []
+        self.actions = {}
+        self.modify_dialog = None
 
-        dominant_action = QAction('Show Dominant Frequencies', self)
-        dominant_action.triggered.connect(self.action_dominant_frequencies)
-        freq_menu.addAction(dominant_action)
+        self.build_actions()
+        self.build_ui()
+        self.build_menus()
 
-        modify_action = QAction('Modify Amplitude / Phase...', self)
-        modify_action.triggered.connect(self.action_modify_component)
-        freq_menu.addAction(modify_action)
+        geometry = self.settings.value("geometry")
+        if geometry:
+            self.restoreGeometry(geometry)
+        else:
+            self.resize(1320, 800)
+        self.apply_theme()
+        self.status("Ready - load a signal (Ctrl+O) or drop a .txt file onto a plot.")
 
-        remove_dc_action = QAction('Remove DC Component...', self)
-        remove_dc_action.triggered.connect(self.action_remove_dc)
-        freq_menu.addAction(remove_dc_action)
+    # --- Construction ---
 
-        idft_action = QAction('Reconstruct Signal (IDFT)', self)
-        idft_action.triggered.connect(self.action_idft)
-        freq_menu.addAction(idft_action)
+    def build_actions(self):
+        table = [
+            ("load", "Load Signal...", "Ctrl+O", "Load a signal file into the target signal", self.action_load),
+            ("save", "Save Signal...", "Ctrl+S", "Save the target signal to a file", self.action_save),
+            ("add", "Add Signal 1 + 2", None, "Add Signal 1 and Signal 2 (result goes to the target)", lambda: self.action_binary("add")),
+            ("sub", "Subtract Signal 1 - 2", None, "Subtract Signal 2 from Signal 1 (result goes to the target)", lambda: self.action_binary("sub")),
+            ("add_files", "Add Multiple Files...", None, "Pick several signal files and add them together", self.action_add_files),
+            ("mul", "Multiply by Constant...", None, "Multiply the target signal by a constant (-1 inverts it)", self.action_multiply),
+            ("square", "Square", None, "Square every sample of the target signal", lambda: self.apply_to_target(dsp_logic.square_signal, "squared")),
+            ("norm", "Normalize...", None, "Scale the target signal to 0..1 or -1..1", self.action_normalize),
+            ("acc", "Accumulate", None, "Running sum of the target signal", lambda: self.apply_to_target(dsp_logic.accumulate_signal, "accumulated")),
+            ("quant", "Quantize...", None, "Quantize the target signal; error goes to the other signal", self.action_quantize),
+            ("dft", "Apply DFT...", "Ctrl+D", "Fourier transform of the target signal", self.action_dft),
+            ("dominant", "Dominant Frequencies", None, "List frequencies with normalized amplitude above 0.5", self.action_dominant),
+            ("modify", "Modify Amplitude / Phase...", "Ctrl+M", "Edit the amplitude and phase of one frequency component", self.action_modify),
+            ("remove_dc", "Remove DC Component", None, "Remove F(0) from the target signal", lambda: self.apply_to_target(lambda x, y: (x, dsp_logic.remove_dc_component(y)), "DC component removed")),
+            ("idft", "Reconstruct Signal (IDFT)", None, "Rebuild the time signal from the current spectrum", self.action_idft),
+            ("load_freq", "Load Frequency File...", None, "Load a frequency-domain file (amplitude and phase)", self.action_load_freq),
+            ("save_freq", "Save Frequency File...", None, "Save the current spectrum as amplitude and phase", self.action_save_freq),
+            ("undo", "Undo", "Ctrl+Z", "Undo the last change", self.action_undo),
+            ("redo", "Redo", "Ctrl+Y", "Redo the last undone change", self.action_redo),
+            ("theme", "Toggle Dark Mode", "Ctrl+T", "Switch between light and dark theme", self.toggle_theme),
+            ("tests", "Run All TA Tests", None, "Run every provided TA verification test", lambda: self.run_suites(TEST_SUITES)),
+            ("exit", "Exit", "Ctrl+Q", "Close the application", self.close),
+        ]
+        for key, text, shortcut, tip, handler in table:
+            action = QAction(text, self)
+            if shortcut:
+                action.setShortcut(QKeySequence(shortcut))
+            action.setToolTip(tip)
+            action.setStatusTip(tip)
+            action.triggered.connect(lambda checked=False, h=handler: h())
+            self.actions[key] = action
 
-        freq_menu.addSeparator()
+    def build_ui(self):
+        central = QWidget()
+        self.setCentralWidget(central)
+        root = QHBoxLayout(central)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
+        root.addWidget(self.build_sidebar())
 
-        load_freq_action = QAction('Load Frequency-Domain File...', self)
-        load_freq_action.triggered.connect(self.action_load_freq_file)
-        freq_menu.addAction(load_freq_action)
+        content = QWidget()
+        column = QVBoxLayout(content)
+        column.setContentsMargins(16, 14, 16, 12)
+        column.setSpacing(12)
+        column.addWidget(self.build_topbar())
 
-        save_freq_action = QAction('Save Frequency-Domain File...', self)
-        save_freq_action.triggered.connect(self.action_save_freq_file)
-        freq_menu.addAction(save_freq_action)
+        self.cards = {1: PlotCard(), 2: PlotCard()}
+        plots = QHBoxLayout()
+        plots.setSpacing(12)
+        for slot, card in self.cards.items():
+            card.file_dropped.connect(lambda path, s=slot: self.load_path(s, path))
+            plots.addWidget(card, 1)
+        column.addLayout(plots, 1)
 
-        # Testing Menu
-        test_menu = menubar.addMenu('Testing')
-        
-        run_task1_action = QAction('Run Task 1 TA Verification...', self)
-        run_task1_action.triggered.connect(self.action_run_task1_tests)
-        test_menu.addAction(run_task1_action)
-        
-        run_quan1_action = QAction('Run Quantization Test 1 (Bits = 3)...', self)
-        run_quan1_action.triggered.connect(self.action_run_quan1_test)
-        test_menu.addAction(run_quan1_action)
-        
-        run_quan2_action = QAction('Run Quantization Test 2 (Levels = 4)...', self)
-        run_quan2_action.triggered.connect(self.action_run_quan2_test)
-        test_menu.addAction(run_quan2_action)
-        
-        run_dft_test_action = QAction('Run DFT Test...', self)
-        run_dft_test_action.triggered.connect(self.action_run_dft_test)
-        test_menu.addAction(run_dft_test_action)
+        self.info_bar = QFrame()
+        self.info_bar.setObjectName("infobar")
+        info_layout = QHBoxLayout(self.info_bar)
+        info_layout.setContentsMargins(14, 8, 14, 8)
+        self.info_label = QLabel()
+        self.info_label.setWordWrap(True)
+        info_layout.addWidget(self.info_label)
+        column.addWidget(self.info_bar)
 
-        run_idft_test_action = QAction('Run IDFT Test...', self)
-        run_idft_test_action.triggered.connect(self.action_run_idft_test)
-        test_menu.addAction(run_idft_test_action)
+        root.addWidget(content, 1)
+        self.target_box.currentIndexChanged.connect(self.on_target_changed)
 
-        run_dc_test_action = QAction('Run Remove DC Test...', self)
-        run_dc_test_action.triggered.connect(self.action_run_dc_test)
-        test_menu.addAction(run_dc_test_action)
+    def build_sidebar(self):
+        frame = QFrame()
+        frame.setObjectName("sidebar")
+        frame.setFixedWidth(290)
+        layout = QVBoxLayout(frame)
+        layout.setContentsMargins(14, 18, 8, 14)
+        layout.setSpacing(0)
 
+        title = QLabel("DSP Studio")
+        title.setObjectName("appTitle")
+        subtitle = QLabel("Signal Processing Framework")
+        subtitle.setObjectName("muted")
+        layout.addWidget(title)
+        layout.addWidget(subtitle)
+
+        target_label = QLabel("TARGET SIGNAL")
+        target_label.setObjectName("sectionLabel")
+        self.target_box = QComboBox()
+        self.target_box.addItems(["Signal 1", "Signal 2"])
+        self.target_box.setToolTip("Operations in the sidebar apply to this signal")
+        layout.addWidget(target_label)
+        layout.addWidget(self.target_box)
+
+        content = QWidget()
+        content.setObjectName("sidebarContent")
+        content_layout = QVBoxLayout(content)
+        content_layout.setContentsMargins(0, 0, 6, 0)
+        content_layout.setSpacing(1)
+        for section, keys in SECTIONS:
+            label = QLabel(section.upper())
+            label.setObjectName("sectionLabel")
+            content_layout.addWidget(label)
+            for key in keys:
+                action = self.actions[key]
+                button = QPushButton(action.text())
+                button.setToolTip(action.toolTip())
+                button.setCursor(Qt.PointingHandCursor)
+                button.clicked.connect(action.trigger)
+                content_layout.addWidget(button)
+        content_layout.addStretch()
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll.setWidget(content)
+        layout.addWidget(scroll, 1)
+
+        run_btn = QPushButton("Run All TA Tests")
+        run_btn.setObjectName("primary")
+        run_btn.setCursor(Qt.PointingHandCursor)
+        run_btn.clicked.connect(self.actions["tests"].trigger)
+        layout.addSpacing(8)
+        layout.addWidget(run_btn)
+        return frame
+
+    def build_topbar(self):
+        bar = QFrame()
+        bar.setObjectName("topbar")
+        layout = QHBoxLayout(bar)
+        layout.setContentsMargins(8, 4, 8, 4)
+
+        view_segment, self.view_buttons = self.make_segment(
+            [("Time Domain", "time"), ("Spectrum", "freq")], self.on_view_changed)
+        repr_segment, self.repr_buttons = self.make_segment(
+            [("Continuous", False), ("Discrete", True)], self.on_repr_changed)
+
+        self.undo_btn = QPushButton("Undo")
+        self.undo_btn.setObjectName("ghost")
+        self.undo_btn.clicked.connect(self.actions["undo"].trigger)
+        self.redo_btn = QPushButton("Redo")
+        self.redo_btn.setObjectName("ghost")
+        self.redo_btn.clicked.connect(self.actions["redo"].trigger)
+        self.theme_btn = QPushButton()
+        self.theme_btn.setObjectName("ghost")
+        self.theme_btn.clicked.connect(self.actions["theme"].trigger)
+
+        layout.addWidget(view_segment)
+        layout.addWidget(repr_segment)
+        layout.addStretch()
+        layout.addWidget(self.undo_btn)
+        layout.addWidget(self.redo_btn)
+        layout.addWidget(self.theme_btn)
+        return bar
+
+    def make_segment(self, options, handler):
+        frame = QFrame()
+        frame.setObjectName("segment")
+        layout = QHBoxLayout(frame)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        group = QButtonGroup(frame)
+        group.setExclusive(True)
+        buttons = {}
+        for text, value in options:
+            button = QPushButton(text)
+            button.setObjectName("seg")
+            button.setCheckable(True)
+            button.setCursor(Qt.PointingHandCursor)
+            group.addButton(button)
+            layout.addWidget(button)
+            button.clicked.connect(lambda checked=False, v=value: handler(v))
+            buttons[value] = button
+        return frame, buttons
+
+    def build_menus(self):
+        a = self.actions
+        bar = self.menuBar()
+
+        file_menu = bar.addMenu("File")
+        for key in ("load", "save", None, "load_freq", "save_freq", None, "exit"):
+            file_menu.addSeparator() if key is None else file_menu.addAction(a[key])
+
+        edit_menu = bar.addMenu("Edit")
+        edit_menu.addAction(a["undo"])
+        edit_menu.addAction(a["redo"])
+
+        for title, keys in (("Arithmetic Operations", SECTIONS[1][1]), ("Quantization", SECTIONS[2][1]),
+                            ("Frequency Domain", SECTIONS[3][1])):
+            menu = bar.addMenu(title)
+            for key in keys:
+                menu.addAction(a[key])
+
+        test_menu = bar.addMenu("Testing")
+        for label, runner in TEST_SUITES:
+            action = QAction(f"Run {label}...", self)
+            action.triggered.connect(lambda checked=False, s=[(label, runner)]: self.run_suites(s))
+            test_menu.addAction(action)
         test_menu.addSeparator()
+        test_menu.addAction(a["tests"])
 
-        run_all_action = QAction('Run All TA Tests (Tasks 1, 2 & 4)...', self)
-        run_all_action.triggered.connect(self.action_run_all_tests)
-        test_menu.addAction(run_all_action)
+        view_menu = bar.addMenu("View")
+        view_menu.addAction(a["theme"])
 
-    def load_signal(self, slot):
-        options = QFileDialog.Options()
-        filepath, _ = QFileDialog.getOpenFileName(self, f"Load Signal {slot}", "", "Text Files (*.txt);;All Files (*)", options=options)
-        if filepath:
-            try:
-                x, y = dsp_logic.read_signal(filepath)
-                if slot == 1:
-                    self.signal1_data = (x, y)
-                else:
-                    self.signal2_data = (x, y)
-                self.update_plots()
-            except Exception as e:
-                QMessageBox.critical(self, "Error", f"Failed to load signal: {str(e)}")
+    # --- State, history and refresh ---
 
-    def save_signal_to_file(self, slot):
-        data = self.signal1_data if slot == 1 else self.signal2_data
-        if data is None:
-            QMessageBox.warning(self, "Warning", f"No data in Signal {slot} to save.")
+    @property
+    def target(self):
+        return self.target_box.currentIndex() + 1
+
+    def status(self, message):
+        self.statusBar().showMessage(message, 9000)
+
+    def snapshot(self):
+        signals = {}
+        for slot, data in self.signals.items():
+            signals[slot] = (list(data[0]), list(data[1])) if data else None
+        spectrum = (list(self.spectrum[0]), list(self.spectrum[1])) if self.spectrum else None
+        return signals, spectrum, self.fs
+
+    def restore(self, snap):
+        self.signals, self.spectrum, self.fs = snap
+
+    def checkpoint(self):
+        self.undo_stack.append(self.snapshot())
+        del self.undo_stack[:-HISTORY_LIMIT]
+        self.redo_stack.clear()
+
+    def action_undo(self):
+        if not self.undo_stack:
             return
-            
-        options = QFileDialog.Options()
-        filepath, _ = QFileDialog.getSaveFileName(self, f"Save Signal {slot}", "", "Text Files (*.txt);;All Files (*)", options=options)
-        if filepath:
-            try:
-                if not filepath.endswith('.txt'):
-                    filepath += '.txt'
-                dsp_logic.save_signal(filepath, data[0], data[1])
-                QMessageBox.information(self, "Success", f"Signal {slot} saved successfully to {os.path.basename(filepath)}")
-            except Exception as e:
-                QMessageBox.critical(self, "Error", f"Failed to save signal: {str(e)}")
+        self.redo_stack.append(self.snapshot())
+        self.restore(self.undo_stack.pop())
+        self.refresh()
+        self.status("Undone")
 
-    def update_plots(self):
-        self.is_continuous = self.radio_continuous.isChecked()
-        
-        self.plot_signal(self.canvas1, self.signal1_data, "Signal 1")
-        self.plot_signal(self.canvas2, self.signal2_data, "Signal 2")
+    def action_redo(self):
+        if not self.redo_stack:
+            return
+        self.undo_stack.append(self.snapshot())
+        self.restore(self.redo_stack.pop())
+        self.refresh()
+        self.status("Redone")
 
-    def plot_signal(self, canvas, data, title):
-        canvas.ax.clear()
-        if data is not None:
-            x = np.array(data[0])
-            y = np.array(data[1])
-            
-            if self.is_continuous:
-                canvas.ax.plot(x, y, color='#1f77b4', linewidth=2)
-            else:
-                canvas.ax.stem(x, y, linefmt='#1f77b4', markerfmt='bo', basefmt='k-')
-            
-            canvas.ax.set_title(title, fontweight="bold")
-            canvas.ax.set_xlabel('Index')
-            canvas.ax.set_ylabel('Amplitude')
-            canvas.ax.grid(True, linestyle='--', alpha=0.7)
+    def refresh(self):
+        c = self.colors
+        if self.view == "freq" and self.spectrum is None:
+            self.view = "time"
+        if self.view == "time":
+            self.draw_time(c)
         else:
-            canvas.ax.set_title(f"{title} (Empty Data)", color="gray")
-            canvas.ax.set_xticks([])
-            canvas.ax.set_yticks([])
-            
-        canvas.fig.tight_layout()
-        canvas.draw()
+            self.draw_spectrum(c)
+        self.update_active_cards()
+        self.update_info()
 
-    # --- Operation Actions ---
+        for value, button in self.view_buttons.items():
+            button.setChecked(value == self.view)
+        for value, button in self.repr_buttons.items():
+            button.setChecked(value == self.discrete)
+            button.setEnabled(self.view == "time")
 
-    def action_addition(self):
-        options = QFileDialog.Options()
-        filepaths, _ = QFileDialog.getOpenFileNames(self, "Select Signals to Add", "", "Text Files (*.txt);;All Files (*)", options=options)
-        
-        if not filepaths: return
-            
-        signals = []
-        for path in filepaths:
-            try:
-                x, y = dsp_logic.read_signal(path)
-                signals.append((x, y))
-            except Exception as e:
-                QMessageBox.warning(self, "Warning", f"Failed to load {os.path.basename(path)}: {str(e)}")
-                
-        if not signals: return
-            
-        res_x, res_y = dsp_logic.add_multiple_signals(signals)
-        self.signal1_data = (res_x, res_y)
-        self.update_plots()
-        QMessageBox.information(self, "Success", f"Successfully added {len(signals)} signals. Result plotted in Signal 1.")
+        self.undo_btn.setEnabled(bool(self.undo_stack))
+        self.redo_btn.setEnabled(bool(self.redo_stack))
+        self.actions["undo"].setEnabled(bool(self.undo_stack))
+        self.actions["redo"].setEnabled(bool(self.redo_stack))
 
-    def action_subtraction(self):
-        options = QFileDialog.Options()
-        file1, _ = QFileDialog.getOpenFileName(self, "Select Minuend Signal (Signal 1)", "", "Text Files (*.txt);;All Files (*)", options=options)
-        if not file1: return
-        
-        file2, _ = QFileDialog.getOpenFileName(self, "Select Subtrahend Signal (Signal 2)", "", "Text Files (*.txt);;All Files (*)", options=options)
-        if not file2: return
-        
-        try:
-            sig1 = dsp_logic.read_signal(file1)
-            sig2 = dsp_logic.read_signal(file2)
-            res_x, res_y = dsp_logic.subtract_signals(sig1, sig2)
-            self.signal1_data = (res_x, res_y)
-            self.update_plots()
-            QMessageBox.information(self, "Success", "Subtraction completed (Signal 1 - Signal 2). Result plotted in Signal 1.")
-        except Exception as e:
-            QMessageBox.critical(self, "Error", f"Failed: {str(e)}")
+        if self.modify_dialog is not None and self.modify_dialog.isVisible():
+            self.modify_dialog.reload()
 
-    def action_multiplication(self):
-        items = []
-        if self.signal1_data: items.append("Signal 1")
-        if self.signal2_data: items.append("Signal 2")
-        
-        if not items:
-            QMessageBox.warning(self, "Warning", "Please load a signal first before multiplying.")
-            return
-            
-        item, ok = QInputDialog.getItem(self, "Select Signal", "Which signal to multiply?", items, 0, False)
-        if not ok or not item: return
-            
-        scalar, ok = QInputDialog.getDouble(self, "Input Scalar", "Enter a constant value to multiply (e.g. -1 to invert):", 1.0)
-        if not ok: return
-            
-        data = self.signal1_data if item == "Signal 1" else self.signal2_data
-        res_x, res_y = dsp_logic.multiply_signal(data[0], data[1], scalar)
-        
-        if item == "Signal 1": self.signal1_data = (res_x, res_y)
-        else: self.signal2_data = (res_x, res_y)
-            
-        self.update_plots()
-        QMessageBox.information(self, "Success", f"{item} successfully multiplied by {scalar}.")
+    def draw_time(self, c):
+        for slot, card in self.cards.items():
+            card.title.setText(f"Signal {slot}")
+            data = self.signals[slot]
+            if data is None:
+                card.info.setText("Empty")
+                card.show_empty("No signal loaded\nPress Ctrl+O or drop a .txt file here", c)
+                continue
+            x, y = data
+            as_stems = card.show_time(x, y, self.discrete, c, "plot1" if slot == 1 else "plot2")
+            note = "" if as_stems or not self.discrete else f"  ·  line view (over {STEM_LIMIT} samples)"
+            card.info.setText(f"N = {len(y)}  ·  min {min(y):.4g}  ·  max {max(y):.4g}  ·  mean {sum(y) / len(y):.4g}{note}")
 
-    def action_squaring(self):
-        items = []
-        if self.signal1_data: items.append("Signal 1")
-        if self.signal2_data: items.append("Signal 2")
-        
-        if not items:
-            QMessageBox.warning(self, "Warning", "Please load a signal first.")
-            return
-            
-        item, ok = QInputDialog.getItem(self, "Select Signal", "Which signal to square?", items, 0, False)
-        if not ok or not item: return
-            
-        data = self.signal1_data if item == "Signal 1" else self.signal2_data
-        res_x, res_y = dsp_logic.square_signal(data[0], data[1])
-        
-        if item == "Signal 1": self.signal1_data = (res_x, res_y)
-        else: self.signal2_data = (res_x, res_y)
-            
-        self.update_plots()
-        QMessageBox.information(self, "Success", f"{item} successfully squared.")
-
-    def action_normalization(self):
-        items = []
-        if self.signal1_data: items.append("Signal 1")
-        if self.signal2_data: items.append("Signal 2")
-        
-        if not items:
-            QMessageBox.warning(self, "Warning", "Please load a signal first.")
-            return
-            
-        item, ok = QInputDialog.getItem(self, "Select Signal", "Which signal to normalize?", items, 0, False)
-        if not ok or not item: return
-        
-        norm_types = ["0 to 1", "-1 to 1"]
-        n_type, ok2 = QInputDialog.getItem(self, "Select Normalization Type", "Normalize to:", norm_types, 0, False)
-        if not ok2 or not n_type: return
-        
-        data = self.signal1_data if item == "Signal 1" else self.signal2_data
-        res_x, res_y = dsp_logic.normalize_signal(data[0], data[1], n_type)
-        
-        if item == "Signal 1": self.signal1_data = (res_x, res_y)
-        else: self.signal2_data = (res_x, res_y)
-            
-        self.update_plots()
-        QMessageBox.information(self, "Success", f"{item} successfully normalized from {n_type}.")
-
-    def action_accumulation(self):
-        items = []
-        if self.signal1_data: items.append("Signal 1")
-        if self.signal2_data: items.append("Signal 2")
-        
-        if not items:
-            QMessageBox.warning(self, "Warning", "Please load a signal first.")
-            return
-            
-        item, ok = QInputDialog.getItem(self, "Select Signal", "Which signal to accumulate?", items, 0, False)
-        if not ok or not item: return
-        
-        data = self.signal1_data if item == "Signal 1" else self.signal2_data
-        res_x, res_y = dsp_logic.accumulate_signal(data[0], data[1])
-        
-        if item == "Signal 1": self.signal1_data = (res_x, res_y)
-        else: self.signal2_data = (res_x, res_y)
-            
-        self.update_plots()
-        QMessageBox.information(self, "Success", f"{item} successfully accumulated.")
-
-    def action_quantization(self):
-        items = []
-        if self.signal1_data: items.append("Signal 1")
-        if self.signal2_data: items.append("Signal 2")
-        
-        if not items:
-            QMessageBox.warning(self, "Warning", "Please load a signal first.")
-            return
-            
-        item, ok = QInputDialog.getItem(self, "Select Signal", "Which signal to quantize?", items, 0, False)
-        if not ok or not item: return
-        
-        choices = ["Levels", "Bits"]
-        q_choice, ok = QInputDialog.getItem(self, "Input Type", "Provide Levels or Bits?", choices, 0, False)
-        if not ok or not q_choice: return
-        
-        levels, bits = None, None
-        if q_choice == "Levels":
-            val, ok = QInputDialog.getInt(self, "Quantization", "Enter number of levels:", 4, 1)
-            if not ok: return
-            levels = val
-        else:
-            val, ok = QInputDialog.getInt(self, "Quantization", "Enter number of bits:", 2, 1)
-            if not ok: return
-            bits = val
-            
-        data = self.signal1_data if item == "Signal 1" else self.signal2_data
-        q_x, intervals, q_y, errors, encoded = dsp_logic.quantize_signal(data[0], data[1], levels=levels, bits=bits)
-        
-        if not q_y:
-            QMessageBox.warning(self, "Warning", "Failed to quantize signal.")
-            return
-            
-        # Plot Quantized on Signal 1, Error on Signal 2
-        self.signal1_data = (q_x, q_y)
-        self.signal2_data = (q_x, errors)
-        self.update_plots()
-        
-        QMessageBox.information(self, "Success", "Signal quantized. Quantized signal plotted in Signal 1, Error plotted in Signal 2.")
-        
-        # Display the detailed table
-        dialog = QuantizationTableDialog(q_x, intervals, data[1], q_y, errors, encoded, self)
-        dialog.exec_()
-
-    # --- Frequency Domain Actions ---
-
-    def pick_loaded_signal(self, prompt):
-        items = []
-        if self.signal1_data: items.append("Signal 1")
-        if self.signal2_data: items.append("Signal 2")
-
-        if not items:
-            QMessageBox.warning(self, "Warning", "Please load a signal first.")
-            return None, None
-
-        item, ok = QInputDialog.getItem(self, "Select Signal", prompt, items, 0, False)
-        if not ok or not item: return None, None
-
-        data = self.signal1_data if item == "Signal 1" else self.signal2_data
-        return item, data
-
-    def plot_spectrum(self):
-        if self.spectrum is None: return
-
+    def draw_spectrum(self, c):
         amplitudes, phases = self.spectrum
         freqs = np.array(dsp_logic.frequencies(len(amplitudes), self.fs))
         normalized = np.array(dsp_logic.normalize_amplitudes(amplitudes))
+        self.cards[1].title.setText("Frequency vs Amplitude")
+        self.cards[1].info.setText(f"Normalized to max |X(k)| = {max(amplitudes):.4g}  ·  red = above 0.5")
+        self.cards[1].show_amplitude(freqs, normalized, c)
+        self.cards[2].title.setText("Frequency vs Phase")
+        self.cards[2].info.setText("Radians, in the range -π to π")
+        self.cards[2].show_phase(freqs, np.array(phases), c)
 
-        self.canvas1.ax.clear()
-        self.canvas1.ax.stem(freqs, normalized, linefmt='#1f77b4', markerfmt='bo', basefmt='k-')
-        self.canvas1.ax.set_title("Frequency vs Amplitude (normalized)", fontweight="bold")
-        self.canvas1.ax.set_xlabel('Frequency (Hz)')
-        self.canvas1.ax.set_ylabel('Normalized Amplitude')
-        self.canvas1.ax.grid(True, linestyle='--', alpha=0.7)
-        self.canvas1.fig.tight_layout()
-        self.canvas1.draw()
+    def update_active_cards(self):
+        for slot, card in self.cards.items():
+            card.setProperty("active", self.view == "time" and slot == self.target)
+            card.style().unpolish(card)
+            card.style().polish(card)
 
-        self.canvas2.ax.clear()
-        self.canvas2.ax.stem(freqs, np.array(phases), linefmt='#d62728', markerfmt='ro', basefmt='k-')
-        self.canvas2.ax.set_title("Frequency vs Phase", fontweight="bold")
-        self.canvas2.ax.set_xlabel('Frequency (Hz)')
-        self.canvas2.ax.set_ylabel('Phase (radians)')
-        self.canvas2.ax.grid(True, linestyle='--', alpha=0.7)
-        self.canvas2.fig.tight_layout()
-        self.canvas2.draw()
-
-    def show_dominant_frequencies(self):
-        amplitudes, phases = self.spectrum
-        freqs = dsp_logic.frequencies(len(amplitudes), self.fs)
-        dominant = dsp_logic.dominant_frequencies(freqs, amplitudes)
-
-        if dominant:
-            lines = "\n".join(f"{f:.4f} Hz" for f in dominant)
-            QMessageBox.information(self, "Dominant Frequencies", f"Frequencies with normalized amplitude > 0.5:\n\n{lines}")
+    def update_info(self):
+        if self.view == "freq":
+            amplitudes = self.spectrum[0]
+            freqs = dsp_logic.frequencies(len(amplitudes), self.fs)
+            dominant = dsp_logic.dominant_frequencies(freqs, amplitudes)
+            shown = ", ".join(f"{f:g} Hz" for f in dominant[:12])
+            if len(dominant) > 12:
+                shown += ", ..."
+            self.info_label.setText(f"Fs = {self.fs:g} Hz   ·   N = {len(amplitudes)}   ·   "
+                                    f"Δf = {self.fs / len(amplitudes):g} Hz   ·   "
+                                    f"Dominant (> 0.5): {shown or 'none'}")
         else:
-            QMessageBox.information(self, "Dominant Frequencies", "No frequency has normalized amplitude > 0.5.")
+            counts = [len(self.signals[s][1]) if self.signals[s] else 0 for s in (1, 2)]
+            self.info_label.setText(f"Target: Signal {self.target}   ·   Signal 1: {counts[0]} samples   ·   "
+                                    f"Signal 2: {counts[1]} samples")
+
+    def on_target_changed(self):
+        self.update_active_cards()
+        self.update_info()
+
+    def on_view_changed(self, value):
+        if value == "freq" and self.spectrum is None:
+            self.status("No spectrum yet - use Apply DFT or load a frequency file first.")
+        else:
+            self.view = value
+        self.refresh()
+
+    def on_repr_changed(self, value):
+        self.discrete = value
+        self.refresh()
+
+    def apply_theme(self):
+        self.colors = gui_theme.DARK if self.dark else gui_theme.LIGHT
+        QApplication.instance().setStyleSheet(gui_theme.stylesheet(self.colors))
+        self.theme_btn.setText("Light Mode" if self.dark else "Dark Mode")
+        self.refresh()
+
+    def toggle_theme(self):
+        self.dark = not self.dark
+        self.settings.setValue("dark", self.dark)
+        self.apply_theme()
+
+    def closeEvent(self, event):
+        self.settings.setValue("geometry", self.saveGeometry())
+        super().closeEvent(event)
+
+    # --- File actions ---
+
+    def require(self, slot):
+        data = self.signals[slot]
+        if data is None:
+            QMessageBox.warning(self, "No Signal", f"Signal {slot} is empty.\nLoad a signal first (Ctrl+O) or pick another target.")
+        return data
+
+    def action_load(self):
+        path, _ = QFileDialog.getOpenFileName(self, f"Load into Signal {self.target}", "", FILE_FILTER)
+        if path:
+            self.load_path(self.target, path)
+
+    def load_path(self, slot, path):
+        try:
+            with open(path, "r") as f:
+                header = f.readline().strip()
+            if header == "1":
+                self.load_freq_path(path)
+                return
+            x, y = dsp_logic.read_signal(path)
+            if not y:
+                raise ValueError("the file contains no samples")
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to load {os.path.basename(path)}:\n{e}")
+            return
+        self.checkpoint()
+        self.signals[slot] = (x, y)
+        self.target_box.setCurrentIndex(slot - 1)
+        self.view = "time"
+        self.refresh()
+        self.status(f"Loaded {os.path.basename(path)} into Signal {slot} ({len(y)} samples)")
+
+    def action_save(self):
+        data = self.require(self.target)
+        if data is None:
+            return
+        path, _ = QFileDialog.getSaveFileName(self, f"Save Signal {self.target}", "", FILE_FILTER)
+        if not path:
+            return
+        if not path.endswith(".txt"):
+            path += ".txt"
+        try:
+            dsp_logic.save_signal(path, data[0], data[1])
+            self.status(f"Saved Signal {self.target} to {os.path.basename(path)}")
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to save signal:\n{e}")
+
+    def ask_sampling_frequency(self):
+        fs, ok = QInputDialog.getDouble(self, "Sampling Frequency", "Sampling frequency (Hz):", self.fs, 0.0001, 1e9, 4)
+        return fs if ok else None
+
+    def action_load_freq(self):
+        path, _ = QFileDialog.getOpenFileName(self, "Load Frequency-Domain File", "", FILE_FILTER)
+        if path:
+            self.load_freq_path(path)
+
+    def load_freq_path(self, path):
+        try:
+            with open(path, "r") as f:
+                header = f.readline().strip()
+            if header != "1":
+                raise ValueError("not a frequency-domain file (its first line must be 1)")
+            amplitudes, phases = dsp_logic.read_freq_signal(path)
+            if not amplitudes:
+                raise ValueError("the file contains no components")
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to load {os.path.basename(path)}:\n{e}")
+            return
+        fs = self.ask_sampling_frequency()
+        if fs is None:
+            return
+        self.checkpoint()
+        self.spectrum = (amplitudes, phases)
+        self.fs = fs
+        self.view = "freq"
+        self.refresh()
+        self.status(f"Loaded spectrum from {os.path.basename(path)} ({len(amplitudes)} components)")
+
+    def action_save_freq(self):
+        if self.spectrum is None:
+            QMessageBox.warning(self, "No Spectrum", "There is no spectrum to save.\nApply the DFT or load a frequency file first.")
+            return
+        path, _ = QFileDialog.getSaveFileName(self, "Save Frequency-Domain File", "", FILE_FILTER)
+        if not path:
+            return
+        if not path.endswith(".txt"):
+            path += ".txt"
+        try:
+            dsp_logic.save_freq_signal(path, self.spectrum[0], self.spectrum[1])
+            self.status(f"Saved spectrum to {os.path.basename(path)}")
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to save spectrum:\n{e}")
+
+    # --- Time-domain operations ---
+
+    def apply_to_target(self, func, message):
+        data = self.require(self.target)
+        if data is None:
+            return
+        self.checkpoint()
+        x, y = func(data[0], data[1])
+        self.signals[self.target] = (list(x), list(y))
+        self.view = "time"
+        self.refresh()
+        self.status(f"Signal {self.target}: {message}")
+
+    def action_binary(self, op):
+        first, second = self.signals[1], self.signals[2]
+        if first is None or second is None:
+            QMessageBox.warning(self, "Two Signals Needed", "Load both Signal 1 and Signal 2 first.")
+            return
+        self.checkpoint()
+        if op == "add":
+            x, y = dsp_logic.add_multiple_signals([first, second])
+            text = "Signal 1 + Signal 2"
+        else:
+            x, y = dsp_logic.subtract_signals(first, second)
+            text = "Signal 1 - Signal 2"
+        self.signals[self.target] = (list(x), list(y))
+        self.view = "time"
+        self.refresh()
+        self.status(f"{text} stored in Signal {self.target}")
+
+    def action_add_files(self):
+        paths, _ = QFileDialog.getOpenFileNames(self, "Select Signals to Add", "", FILE_FILTER)
+        loaded = []
+        for path in paths:
+            try:
+                loaded.append(dsp_logic.read_signal(path))
+            except Exception as e:
+                QMessageBox.warning(self, "Warning", f"Skipped {os.path.basename(path)}:\n{e}")
+        if not loaded:
+            return
+        self.checkpoint()
+        x, y = dsp_logic.add_multiple_signals(loaded)
+        self.signals[self.target] = (list(x), list(y))
+        self.view = "time"
+        self.refresh()
+        self.status(f"Added {len(loaded)} signals into Signal {self.target}")
+
+    def action_multiply(self):
+        if self.require(self.target) is None:
+            return
+        scalar, ok = QInputDialog.getDouble(self, "Multiply", "Constant (use -1 to invert):", 1.0, -1e9, 1e9, 4)
+        if ok:
+            self.apply_to_target(lambda x, y: dsp_logic.multiply_signal(x, y, scalar), f"multiplied by {scalar:g}")
+
+    def action_normalize(self):
+        if self.require(self.target) is None:
+            return
+        kind, ok = QInputDialog.getItem(self, "Normalize", "Normalize to range:", ["0 to 1", "-1 to 1"], 0, False)
+        if ok:
+            self.apply_to_target(lambda x, y: dsp_logic.normalize_signal(x, y, kind), f"normalized to {kind}")
+
+    def action_quantize(self):
+        data = self.require(self.target)
+        if data is None:
+            return
+        dialog = QuantizeDialog(self)
+        if dialog.exec_() != QDialog.Accepted:
+            return
+        levels, bits = dialog.values()
+        x, intervals, q_y, errors, encoded = dsp_logic.quantize_signal(data[0], data[1], levels=levels, bits=bits)
+        if not q_y:
+            QMessageBox.warning(self, "Warning", "Failed to quantize the signal.")
+            return
+        self.checkpoint()
+        other = 2 if self.target == 1 else 1
+        self.signals[self.target] = (x, q_y)
+        self.signals[other] = (x, errors)
+        self.view = "time"
+        self.refresh()
+        self.status(f"Quantized Signal {self.target}; quantization error stored in Signal {other}")
+        QuantizationTableDialog(x, intervals, q_y, errors, encoded, self).exec_()
+
+    # --- Frequency-domain operations ---
+
+    def require_spectrum(self):
+        if self.spectrum is None:
+            QMessageBox.warning(self, "No Spectrum", "There is no spectrum yet.\nApply the DFT or load a frequency file first.")
+        return self.spectrum
 
     def action_dft(self):
-        item, data = self.pick_loaded_signal("Which signal to transform?")
-        if data is None: return
-
-        fs, ok = QInputDialog.getDouble(self, "Sampling Frequency", "Enter sampling frequency (Hz):", 100.0, 0.0001, 1e9, 4)
-        if not ok: return
-
-        self.fs = fs
-        self.spectrum = dsp_logic.dft(data[1])
-        self.plot_spectrum()
-        self.show_dominant_frequencies()
-
-    def action_dominant_frequencies(self):
-        if self.spectrum is None:
-            QMessageBox.warning(self, "Warning", "Apply DFT or load a frequency-domain file first.")
+        data = self.require(self.target)
+        if data is None:
             return
-        self.show_dominant_frequencies()
-
-    def action_modify_component(self):
-        if self.spectrum is None:
-            QMessageBox.warning(self, "Warning", "Apply DFT or load a frequency-domain file first.")
+        fs = self.ask_sampling_frequency()
+        if fs is None:
             return
-
-        amplitudes, phases = self.spectrum
-        k, ok = QInputDialog.getInt(self, "Select Component", f"Enter component index k (0 to {len(amplitudes) - 1}):", 0, 0, len(amplitudes) - 1)
-        if not ok: return
-
-        new_amp, ok = QInputDialog.getDouble(self, "Modify Amplitude", f"Amplitude of k = {k} ({k * self.fs / len(amplitudes):.4f} Hz):", amplitudes[k], 0, 1e12, 6)
-        if not ok: return
-
-        new_phase, ok = QInputDialog.getDouble(self, "Modify Phase", f"Phase of k = {k} (radians):", phases[k], -1e6, 1e6, 6)
-        if not ok: return
-
-        amplitudes[k] = new_amp
-        phases[k] = new_phase
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            amplitudes, phases = dsp_logic.dft(data[1])
+        finally:
+            QApplication.restoreOverrideCursor()
+        self.checkpoint()
         self.spectrum = (amplitudes, phases)
-        self.plot_spectrum()
+        self.fs = fs
+        self.view = "freq"
+        self.refresh()
+        self.status(f"DFT of Signal {self.target} computed ({len(amplitudes)} components, Fs = {fs:g} Hz)")
 
-    def action_remove_dc(self):
-        item, data = self.pick_loaded_signal("Remove DC component from which signal?")
-        if data is None: return
+    def action_dominant(self):
+        if self.require_spectrum() is None:
+            return
+        amplitudes = self.spectrum[0]
+        freqs = dsp_logic.frequencies(len(amplitudes), self.fs)
+        dominant = dsp_logic.dominant_frequencies(freqs, amplitudes)
+        if dominant:
+            lines = "\n".join(f"• {f:.4f} Hz" for f in dominant)
+            QMessageBox.information(self, "Dominant Frequencies", f"Frequencies with normalized amplitude above 0.5:\n\n{lines}")
+        else:
+            QMessageBox.information(self, "Dominant Frequencies", "No frequency has a normalized amplitude above 0.5.")
 
-        res_y = dsp_logic.remove_dc_component(data[1])
+    def action_modify(self):
+        if self.require_spectrum() is None:
+            return
+        if self.modify_dialog is None:
+            self.modify_dialog = ModifyComponentDialog(self)
+        self.modify_dialog.reload()
+        self.modify_dialog.show()
+        self.modify_dialog.raise_()
 
-        if item == "Signal 1": self.signal1_data = (data[0], res_y)
-        else: self.signal2_data = (data[0], res_y)
-
-        self.update_plots()
-        QMessageBox.information(self, "Success", f"DC component removed from {item}.")
+    def modify_component(self, k, amplitude, phase):
+        amplitudes, phases = list(self.spectrum[0]), list(self.spectrum[1])
+        self.checkpoint()
+        amplitudes[k] = amplitude
+        phases[k] = phase
+        self.spectrum = (amplitudes, phases)
+        self.view = "freq"
+        self.refresh()
+        self.status(f"Component k = {k} set to amplitude {amplitude:g}, phase {phase:g} rad")
 
     def action_idft(self):
-        if self.spectrum is None:
-            QMessageBox.warning(self, "Warning", "Apply DFT or load a frequency-domain file first.")
+        if self.require_spectrum() is None:
             return
-
-        amplitudes, phases = self.spectrum
-        samples = dsp_logic.idft(amplitudes, phases)
-        self.signal1_data = (list(range(len(samples))), samples)
-        self.update_plots()
-        QMessageBox.information(self, "Success", "Signal reconstructed using IDFT. Result plotted in Signal 1.")
-
-    def action_load_freq_file(self):
-        options = QFileDialog.Options()
-        filepath, _ = QFileDialog.getOpenFileName(self, "Load Frequency-Domain File", "", "Text Files (*.txt);;All Files (*)", options=options)
-        if not filepath: return
-
-        fs, ok = QInputDialog.getDouble(self, "Sampling Frequency", "Enter sampling frequency (Hz):", self.fs, 0.0001, 1e9, 4)
-        if not ok: return
-
+        QApplication.setOverrideCursor(Qt.WaitCursor)
         try:
-            amplitudes, phases = dsp_logic.read_freq_signal(filepath)
-            self.fs = fs
-            self.spectrum = (amplitudes, phases)
-            self.plot_spectrum()
-        except Exception as e:
-            QMessageBox.critical(self, "Error", f"Failed to load frequency-domain file: {str(e)}")
+            samples = dsp_logic.idft(self.spectrum[0], self.spectrum[1])
+        finally:
+            QApplication.restoreOverrideCursor()
+        self.checkpoint()
+        self.signals[self.target] = (list(range(len(samples))), samples)
+        self.view = "time"
+        self.refresh()
+        self.status(f"Signal reconstructed with the IDFT and stored in Signal {self.target}")
 
-    def action_save_freq_file(self):
-        if self.spectrum is None:
-            QMessageBox.warning(self, "Warning", "No frequency-domain data to save.")
-            return
+    # --- Test suites ---
 
-        options = QFileDialog.Options()
-        filepath, _ = QFileDialog.getSaveFileName(self, "Save Frequency-Domain File", "", "Text Files (*.txt);;All Files (*)", options=options)
-        if filepath:
-            try:
-                if not filepath.endswith('.txt'):
-                    filepath += '.txt'
-                dsp_logic.save_freq_signal(filepath, self.spectrum[0], self.spectrum[1])
-                QMessageBox.information(self, "Success", f"Saved to {os.path.basename(filepath)}")
-            except Exception as e:
-                QMessageBox.critical(self, "Error", f"Failed to save: {str(e)}")
-
-    # --- Test Suite Actions ---
-
-    def load_task4_tests(self):
-        task4_dir = os.path.join(os.path.dirname(__file__), "Labs", "Task & Files-20261024T083112Z-1-001", "Task & Files")
-        compare_dir = os.path.join(task4_dir, "Test Cases-20261024T083237Z-1-001", "Test Cases")
-        dc_dir = os.path.join(task4_dir, "Remove DC component-20261024T083221Z-1-001", "Remove DC component")
-        for path in (compare_dir, dc_dir):
-            if path not in sys.path:
-                sys.path.insert(0, path)
-        import signalcompare, CompareSignals
-        return signalcompare, CompareSignals
-
-    def action_run_dft_test(self):
+    def run_suites(self, suites):
+        results = []
+        QApplication.setOverrideCursor(Qt.WaitCursor)
         try:
-            signalcompare, _ = self.load_task4_tests()
-            passed = signalcompare.run_dft_test()
-            if passed:
-                QMessageBox.information(self, "DFT Test", "DFT Test (Amplitude & Phase) PASSED successfully!")
-            else:
-                QMessageBox.warning(self, "DFT Test", "DFT Test FAILED!")
-        except Exception as e:
-            QMessageBox.critical(self, "Error", f"Failed to execute DFT test: {str(e)}")
+            for label, runner in suites:
+                try:
+                    results.extend(runner())
+                except Exception as e:
+                    results.append((f"{label} (error: {e})", False))
+        finally:
+            QApplication.restoreOverrideCursor()
+        passed = sum(1 for _, ok in results if ok)
+        self.status(f"Tests: {passed} of {len(results)} passed")
+        TestReportDialog(results, self.colors, self).exec_()
 
-    def action_run_idft_test(self):
-        try:
-            signalcompare, _ = self.load_task4_tests()
-            passed = signalcompare.run_idft_test()
-            if passed:
-                QMessageBox.information(self, "IDFT Test", "IDFT Test PASSED successfully!")
-            else:
-                QMessageBox.warning(self, "IDFT Test", "IDFT Test FAILED!")
-        except Exception as e:
-            QMessageBox.critical(self, "Error", f"Failed to execute IDFT test: {str(e)}")
-
-    def action_run_dc_test(self):
-        try:
-            _, compare_signals = self.load_task4_tests()
-            passed = compare_signals.run_dc_test()
-            if passed:
-                QMessageBox.information(self, "Remove DC Test", "Remove DC Component Test PASSED successfully!")
-            else:
-                QMessageBox.warning(self, "Remove DC Test", "Remove DC Component Test FAILED!")
-        except Exception as e:
-            QMessageBox.critical(self, "Error", f"Failed to execute Remove DC test: {str(e)}")
-
-    def action_run_task1_tests(self):
-        try:
-            test_script_dir = os.path.join(os.path.dirname(__file__), "Labs", "Task1 files+test-20260930T203736Z-1-001")
-            if test_script_dir not in sys.path:
-                sys.path.insert(0, test_script_dir)
-            import Task1Test
-            
-            results = Task1Test.run_all_tests()
-            report_lines = []
-            all_passed = True
-            for test_name, passed in results:
-                status = "PASSED" if passed else "FAILED"
-                report_lines.append(f"• {test_name}: {status}")
-                if not passed:
-                    all_passed = False
-                    
-            summary = "\n".join(report_lines)
-            if all_passed:
-                QMessageBox.information(self, "Task 1 Tests", f"All Task 1 tests passed successfully!\n\n{summary}")
-            else:
-                QMessageBox.warning(self, "Task 1 Tests", f"Some tests failed:\n\n{summary}")
-        except Exception as e:
-            QMessageBox.critical(self, "Error", f"Failed to execute Task 1 test suite: {str(e)}")
-
-    def action_run_quan1_test(self):
-        try:
-            quan_dir = os.path.join(os.path.dirname(__file__), "Quantization-20261011T152410Z-1-001", "Quantization")
-            if quan_dir not in sys.path:
-                sys.path.insert(0, quan_dir)
-            import QuanTest1
-            
-            passed = QuanTest1.run_test1()
-            if passed:
-                QMessageBox.information(self, "Quantization Test 1", "Quantization Test 1 (Bits = 3) PASSED successfully!")
-            else:
-                QMessageBox.warning(self, "Quantization Test 1", "Quantization Test 1 FAILED!")
-        except Exception as e:
-            QMessageBox.critical(self, "Error", f"Failed to execute Quantization Test 1: {str(e)}")
-
-    def action_run_quan2_test(self):
-        try:
-            quan_dir = os.path.join(os.path.dirname(__file__), "Quantization-20261011T152410Z-1-001", "Quantization")
-            if quan_dir not in sys.path:
-                sys.path.insert(0, quan_dir)
-            import QuanTest2
-            
-            passed = QuanTest2.run_test2()
-            if passed:
-                QMessageBox.information(self, "Quantization Test 2", "Quantization Test 2 (Levels = 4) PASSED successfully!")
-            else:
-                QMessageBox.warning(self, "Quantization Test 2", "Quantization Test 2 FAILED!")
-        except Exception as e:
-            QMessageBox.critical(self, "Error", f"Failed to execute Quantization Test 2: {str(e)}")
-
-    def action_run_all_tests(self):
-        try:
-            report_lines = []
-            all_passed = True
-            
-            # Task 1 tests
-            test_script_dir = os.path.join(os.path.dirname(__file__), "Labs", "Task1 files+test-20260930T203736Z-1-001")
-            if test_script_dir not in sys.path:
-                sys.path.insert(0, test_script_dir)
-            import Task1Test
-            t1_res = Task1Test.run_all_tests()
-            for name, passed in t1_res:
-                report_lines.append(f"• {name}: {'PASSED' if passed else 'FAILED'}")
-                if not passed: all_passed = False
-                
-            # Quantization tests
-            quan_dir = os.path.join(os.path.dirname(__file__), "Quantization-20261011T152410Z-1-001", "Quantization")
-            if quan_dir not in sys.path:
-                sys.path.insert(0, quan_dir)
-            import QuanTest1, QuanTest2
-            
-            q1_passed = QuanTest1.run_test1()
-            report_lines.append(f"• Quantization Test 1 (Bits=3): {'PASSED' if q1_passed else 'FAILED'}")
-            if not q1_passed: all_passed = False
-            
-            q2_passed = QuanTest2.run_test2()
-            report_lines.append(f"• Quantization Test 2 (Levels=4): {'PASSED' if q2_passed else 'FAILED'}")
-            if not q2_passed: all_passed = False
-
-            # Task 4 tests
-            signalcompare, compare_signals = self.load_task4_tests()
-            for name, passed in [("DFT (Amplitude & Phase)", signalcompare.run_dft_test()),
-                                 ("IDFT", signalcompare.run_idft_test()),
-                                 ("Remove DC Component", compare_signals.run_dc_test())]:
-                report_lines.append(f"• {name}: {'PASSED' if passed else 'FAILED'}")
-                if not passed: all_passed = False
-
-            summary = "\n".join(report_lines)
-            if all_passed:
-                QMessageBox.information(self, "All TA Tests", f"All TA verification tests passed successfully!\n\n{summary}")
-            else:
-                QMessageBox.warning(self, "All TA Tests", f"Some tests failed:\n\n{summary}")
-        except Exception as e:
-            QMessageBox.critical(self, "Error", f"Failed to execute all tests: {str(e)}")
 
 if __name__ == '__main__':
+    QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
     app = QApplication(sys.argv)
     app.setStyle('Fusion')
     window = MainWindow()
