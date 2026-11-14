@@ -258,3 +258,18 @@ def remove_dc_component(y):
     amplitudes[0] = 0.0
     phases[0] = 0.0
     return idft(amplitudes, phases)
+
+def convolve_signals(x1, y1, x2, y2):
+    if not y1 or not y2:
+        return [], []
+
+    start_index = min(x1) + min(x2)
+    result_length = len(y1) + len(y2) - 1
+    result_y = [0.0] * result_length
+
+    for i in range(len(y1)):
+        for j in range(len(y2)):
+            result_y[i + j] += y1[i] * y2[j]
+
+    result_x = list(range(start_index, start_index + result_length))
+    return result_x, result_y

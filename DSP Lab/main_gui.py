@@ -22,6 +22,7 @@ QUAN_DIR = os.path.join(ROOT, "Quantization-20261011T152410Z-1-001", "Quantizati
 TASK4_DIR = os.path.join(ROOT, "Labs", "Task & Files-20261024T083112Z-1-001", "Task & Files")
 COMPARE_DIR = os.path.join(TASK4_DIR, "Test Cases-20261024T083237Z-1-001", "Test Cases")
 DC_DIR = os.path.join(TASK4_DIR, "Remove DC component-20261024T083221Z-1-001", "Remove DC component")
+CONV_DIR = os.path.join(ROOT, "conv")
 
 STEM_LIMIT = 300
 HISTORY_LIMIT = 30
@@ -29,7 +30,7 @@ FILE_FILTER = "Text Files (*.txt);;All Files (*)"
 
 SECTIONS = [
     ("Signals", ["load", "save"]),
-    ("Arithmetic", ["add", "sub", "add_files", "mul", "square", "norm", "acc"]),
+    ("Arithmetic", ["add", "sub", "conv", "add_files", "mul", "square", "norm", "acc"]),
     ("Quantization", ["quant"]),
     ("Frequency Domain", ["dft", "dominant", "modify", "remove_dc", "idft", "load_freq", "save_freq"]),
 ]
@@ -59,6 +60,9 @@ def run_idft():
 def run_dc():
     return [("Remove DC Component", load_module(DC_DIR, "CompareSignals").run_dc_test())]
 
+def run_conv():
+    return [("Convolution", load_module(CONV_DIR, "ConvTest").run_conv_test())]
+
 
 TEST_SUITES = [
     ("Task 1 Tests", run_task1),
@@ -67,6 +71,7 @@ TEST_SUITES = [
     ("DFT Test", run_dft),
     ("IDFT Test", run_idft),
     ("Remove DC Test", run_dc),
+    ("Convolution Test", run_conv),
 ]
 
 
@@ -451,6 +456,7 @@ class MainWindow(QMainWindow):
             ("save", "Save Signal...", "Ctrl+S", "Save the target signal to a file", self.action_save),
             ("add", "Add Signal 1 + 2", None, "Add Signal 1 and Signal 2 (result goes to the target)", lambda: self.action_binary("add")),
             ("sub", "Subtract Signal 1 - 2", None, "Subtract Signal 2 from Signal 1 (result goes to the target)", lambda: self.action_binary("sub")),
+            ("conv", "Convolve Signal 1 * 2", None, "Convolve Signal 1 with Signal 2 (result goes to the target)", lambda: self.action_binary("conv")),
             ("add_files", "Add Multiple Files...", None, "Pick several signal files and add them together", self.action_add_files),
             ("mul", "Multiply by Constant...", None, "Multiply the target signal by a constant (-1 inverts it)", self.action_multiply),
             ("square", "Square", None, "Square every sample of the target signal", lambda: self.apply_to_target(dsp_logic.square_signal, "squared")),
@@ -903,6 +909,9 @@ class MainWindow(QMainWindow):
         if op == "add":
             x, y = dsp_logic.add_multiple_signals([first, second])
             text = "Signal 1 + Signal 2"
+        elif op == "conv":
+            x, y = dsp_logic.convolve_signals(first[0], first[1], second[0], second[1])
+            text = "Signal 1 * Signal 2 (convolution)"
         else:
             x, y = dsp_logic.subtract_signals(first, second)
             text = "Signal 1 - Signal 2"
