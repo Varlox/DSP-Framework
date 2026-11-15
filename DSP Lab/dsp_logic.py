@@ -273,3 +273,47 @@ def convolve_signals(x1, y1, x2, y2):
 
     result_x = list(range(start_index, start_index + result_length))
     return result_x, result_y
+
+def moving_average(x, y, window):
+    if window < 1 or window > len(y):
+        return [], []
+
+    result_y = []
+    for i in range(len(y) - window + 1):
+        result_y.append(sum(y[i:i + window]) / window)
+
+    return x[:len(result_y)], result_y
+
+def first_derivative(x, y):
+    result_y = []
+    for i in range(1, len(y)):
+        result_y.append(y[i] - y[i - 1])
+    return x[1:], result_y
+
+def second_derivative(x, y):
+    result_y = []
+    for i in range(1, len(y) - 1):
+        result_y.append(y[i + 1] - 2 * y[i] + y[i - 1])
+    return x[1:-1], result_y
+
+def shift_signal(x, y, k):
+    shifted_x = []
+    for index in x:
+        shifted_x.append(index + k)
+    return shifted_x, list(y)
+
+def fold_signal(x, y):
+    folded_x = []
+    for index in reversed(x):
+        folded_x.append(-index)
+    return folded_x, list(reversed(y))
+
+def remove_dc_time_domain(y):
+    if not y:
+        return []
+
+    mean = sum(y) / len(y)
+    result = []
+    for value in y:
+        result.append(value - mean)
+    return result

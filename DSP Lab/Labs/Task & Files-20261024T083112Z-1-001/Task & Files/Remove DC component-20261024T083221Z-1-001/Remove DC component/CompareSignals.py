@@ -48,5 +48,16 @@ def run_dc_test():
     result = dsp_logic.remove_dc_component(y)
     return SignalsAreEqual("DC Component", os.path.join(curr_dir, "DC_component_output.txt"), x, result)
 
+def run_dc_time_test():
+    parent_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", "..", ".."))
+    if parent_dir not in sys.path:
+        sys.path.insert(0, parent_dir)
+    import dsp_logic
+
+    curr_dir = os.path.dirname(os.path.abspath(__file__))
+    x, y = dsp_logic.read_signal(os.path.join(curr_dir, "DC_component_input.txt"))
+    result = dsp_logic.remove_dc_time_domain(y)
+    return SignalsAreEqual("DC Component (Time Domain)", os.path.join(curr_dir, "DC_component_output.txt"), x, result)
+
 if __name__ == '__main__':
     run_dc_test()

@@ -23,6 +23,7 @@ TASK4_DIR = os.path.join(ROOT, "Labs", "Task & Files-20261024T083112Z-1-001", "T
 COMPARE_DIR = os.path.join(TASK4_DIR, "Test Cases-20261024T083237Z-1-001", "Test Cases")
 DC_DIR = os.path.join(TASK4_DIR, "Remove DC component-20261024T083221Z-1-001", "Remove DC component")
 CONV_DIR = os.path.join(ROOT, "conv")
+TIME_DIR = os.path.join(ROOT, "Labs", "task4")
 
 STEM_LIMIT = 300
 HISTORY_LIMIT = 30
@@ -33,6 +34,7 @@ SECTIONS = [
     ("Arithmetic", ["add", "sub", "conv", "add_files", "mul", "square", "norm", "acc"]),
     ("Quantization", ["quant"]),
     ("Frequency Domain", ["dft", "dominant", "modify", "remove_dc", "idft", "load_freq", "save_freq"]),
+    ("Time Domain", ["smooth", "d1", "d2", "shift", "fold", "fold_shift", "remove_dc_time"]),
 ]
 
 
@@ -63,6 +65,18 @@ def run_dc():
 def run_conv():
     return [("Convolution", load_module(CONV_DIR, "ConvTest").run_conv_test())]
 
+def run_moving_average():
+    return load_module(os.path.join(TIME_DIR, "Moving Average"), "MovAvgTest").run_moving_average_tests()
+
+def run_derivative():
+    return [("Derivatives (1st & 2nd)", load_module(os.path.join(TIME_DIR, "Derivative Updated"), "DerivativeSignal").DerivativeSignal())]
+
+def run_shift_fold():
+    return load_module(os.path.join(TIME_DIR, "Shifting and Folding"), "Shift_Fold_Signal").run_shift_fold_tests()
+
+def run_dc_time():
+    return [("Remove DC (Time Domain)", load_module(DC_DIR, "CompareSignals").run_dc_time_test())]
+
 
 TEST_SUITES = [
     ("Task 1 Tests", run_task1),
@@ -72,6 +86,10 @@ TEST_SUITES = [
     ("IDFT Test", run_idft),
     ("Remove DC Test", run_dc),
     ("Convolution Test", run_conv),
+    ("Moving Average Tests", run_moving_average),
+    ("Derivative Test", run_derivative),
+    ("Shift & Fold Tests", run_shift_fold),
+    ("Remove DC (Time Domain) Test", run_dc_time),
 ]
 
 
@@ -466,10 +484,17 @@ class MainWindow(QMainWindow):
             ("dft", "Apply DFT...", "Ctrl+D", "Fourier transform of the target signal", self.action_dft),
             ("dominant", "Dominant Frequencies", None, "List frequencies with normalized amplitude above 0.5", self.action_dominant),
             ("modify", "Modify Amplitude / Phase...", "Ctrl+M", "Edit the amplitude and phase of one frequency component", self.action_modify),
-            ("remove_dc", "Remove DC Component", None, "Remove F(0) from the target signal", lambda: self.apply_to_target(lambda x, y: (x, dsp_logic.remove_dc_component(y)), "DC component removed")),
+            ("remove_dc", "Remove DC (via DFT)", None, "Remove F(0) in the frequency domain, then reconstruct", lambda: self.apply_to_target(lambda x, y: (x, dsp_logic.remove_dc_component(y)), "DC component removed")),
             ("idft", "Reconstruct Signal (IDFT)", None, "Rebuild the time signal from the current spectrum", self.action_idft),
             ("load_freq", "Load Frequency File...", None, "Load a frequency-domain file (amplitude and phase)", self.action_load_freq),
             ("save_freq", "Save Frequency File...", None, "Save the current spectrum as amplitude and phase", self.action_save_freq),
+            ("smooth", "Smoothing (Moving Average)...", None, "Moving average over a number of points you choose", self.action_smooth),
+            ("d1", "First Derivative", None, "y(n) = x(n) - x(n-1)", lambda: self.apply_to_target(dsp_logic.first_derivative, "first derivative")),
+            ("d2", "Second Derivative", None, "y(n) = x(n+1) - 2x(n) + x(n-1)", lambda: self.apply_to_target(dsp_logic.second_derivative, "second derivative")),
+            ("shift", "Delay / Advance...", None, "Shift the target signal by k steps (positive = delay, negative = advance)", self.action_shift),
+            ("fold", "Fold Signal", None, "Fold the target signal: y(n) = x(-n)", lambda: self.apply_to_target(dsp_logic.fold_signal, "folded")),
+            ("fold_shift", "Delay / Advance Folded...", None, "Fold the target signal, then delay or advance it by k steps", self.action_fold_shift),
+            ("remove_dc_time", "Remove DC (Time Domain)", None, "Subtract the mean from every sample", lambda: self.apply_to_target(lambda x, y: (x, dsp_logic.remove_dc_time_domain(y)), "DC component removed (mean subtracted)")),
             ("undo", "Undo", "Ctrl+Z", "Undo the last change", self.action_undo),
             ("redo", "Redo", "Ctrl+Y", "Redo the last undone change", self.action_redo),
             ("theme", "Toggle Dark Mode", "Ctrl+T", "Switch between light and dark theme", self.toggle_theme),
@@ -636,7 +661,7 @@ class MainWindow(QMainWindow):
         edit_menu.addAction(a["redo"])
 
         for title, keys in (("Arithmetic Operations", SECTIONS[1][1]), ("Quantization", SECTIONS[2][1]),
-                            ("Frequency Domain", SECTIONS[3][1])):
+                            ("Frequency Domain", SECTIONS[3][1]), ("Time Domain", SECTIONS[4][1])):
             menu = bar.addMenu(title)
             for key in keys:
                 menu.addAction(a[key])
@@ -893,8 +918,11 @@ class MainWindow(QMainWindow):
         data = self.require(self.target)
         if data is None:
             return
-        self.checkpoint()
         x, y = func(data[0], data[1])
+        if not y:
+            QMessageBox.warning(self, "Empty Result", "The operation produced no samples (the signal may be too short).")
+            return
+        self.checkpoint()
         self.signals[self.target] = (list(x), list(y))
         self.view = "time"
         self.refresh()
@@ -1042,6 +1070,38 @@ class MainWindow(QMainWindow):
         self.view = "time"
         self.refresh()
         self.status(f"Signal reconstructed with the IDFT and stored in Signal {self.target}")
+
+    # --- Time Domain operations ---
+
+    def action_smooth(self):
+        data = self.require(self.target)
+        if data is None:
+            return
+        count = len(data[1])
+        window, ok = QInputDialog.getInt(self, "Smoothing", f"Number of points to average (1 to {count}):", 3, 1, count)
+        if ok:
+            self.apply_to_target(lambda x, y: dsp_logic.moving_average(x, y, window), f"smoothed with a {window}-point moving average")
+
+    def ask_shift(self):
+        k, ok = QInputDialog.getInt(self, "Delay / Advance", "Shift k (positive = delay, negative = advance):", 0, -1000000, 1000000)
+        return k if ok else None
+
+    def describe_shift(self, k):
+        return f"delayed by {k}" if k >= 0 else f"advanced by {-k}"
+
+    def action_shift(self):
+        if self.require(self.target) is None:
+            return
+        k = self.ask_shift()
+        if k is not None:
+            self.apply_to_target(lambda x, y: dsp_logic.shift_signal(x, y, k), self.describe_shift(k))
+
+    def action_fold_shift(self):
+        if self.require(self.target) is None:
+            return
+        k = self.ask_shift()
+        if k is not None:
+            self.apply_to_target(lambda x, y: dsp_logic.shift_signal(*dsp_logic.fold_signal(x, y), k), f"folded and {self.describe_shift(k)}")
 
     # --- Test suites ---
 
